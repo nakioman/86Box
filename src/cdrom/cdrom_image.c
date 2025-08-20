@@ -38,6 +38,9 @@
 #include <86box/cdrom.h>
 #include <86box/cdrom_image.h>
 #include <86box/cdrom_image_viso.h>
+#ifndef _WIN32
+#include <86box/cdrom_image_device.h>
+#endif
 
 #include <sndfile.h>
 
@@ -111,6 +114,8 @@ typedef struct cd_image_t {
     int           is_dvd;
     int           has_audio;
     int           has_dstruct;
+    int           is_device;           /* Flag indicating if this is a physical device */
+    char          device_path[1024];   /* Path to the device for device-based CDs */
     int32_t       tracks_num;
     uint32_t      bad_sectors_num;
     track_t      *tracks;
@@ -246,6 +251,10 @@ static char   *cit[4]   = { "SPECIAL", "NONE", "ZERO", "NORMAL" };
 #else
 #    define image_log(priv, fmt, ...)
 #endif
+
+/* Forward declarations for device handling */
+static int  image_reload_device(cd_image_t *img);
+static void image_mark_as_device(cd_image_t *img, const char *device_path);
 
 typedef struct audio_file_t {
     SNDFILE *file;
@@ -479,6 +488,21 @@ index_file_init(const uint8_t id, const char *filename, int *error, int *is_viso
     track_file_t *tf = NULL;
 
     *is_viso = 0;
+  
+#ifndef _WIN32
+    /* Try device access if the filename looks like a device path (Linux only) */
+    if (strncmp(filename, "/dev/", 5) == 0) {
+        tf = cdrom_device_init(id, filename, error);
+        if (!*error) {
+            return tf;
+        }
+        /* If device init failed, clean up and try other methods */
+        if (tf != NULL) {
+            tf->close(tf);
+            tf = NULL;
+        }
+    }
+#endif
 
     /* Current we only support .BIN files, either combined or one per
        track. In the future, more is planned. */
@@ -2351,17 +2375,19 @@ static int
 image_read_sector(const void *local, uint8_t *buffer,
                   const uint32_t sector)
 {
-    const cd_image_t *img    = (const cd_image_t *) local;
-    cdrom_t          *dev    = (cdrom_t *) img->dev;
-    int               m      = 0;
-    int               s      = 0;
-    int               f      = 0;
-    int               ret    = 0;
-    uint32_t          lba    = sector;
-    int               track;
-    int               index;
-    uint8_t           q[16]  = { 0x00 };
-    uint8_t          *buf    = buffer;
+    cd_image_t           *img    = (cd_image_t *) local;  /* Remove const for device change detection */
+    cdrom_t              *dev    = (cdrom_t *) img->dev;
+    int                   m      = 0;
+    int                   s      = 0;
+    int                   f      = 0;
+    int                   ret    = 0;
+    uint32_t              lba    = sector;
+    int                   track;
+    int                   index;
+    uint8_t               q[16]  = { 0x00 };
+    uint8_t              *buf    = buffer;
+
+    /* Monitor approach handles disc changes automatically */
 
     if (sector == 0xffffffff)
         lba = img->dev->seek_pos;
@@ -2511,10 +2537,13 @@ image_get_track_type(const void *local, const uint32_t sector)
 static uint32_t
 image_get_last_block(const void *local)
 {
-    const cd_image_t *img = (const cd_image_t *) local;
+    cd_image_t       *img = (cd_image_t *) local;  /* Remove const for device change detection */
     uint32_t          lb  = 0x00000000;
 
     if (img != NULL) {
+        /* Check for disc changes if this is a device-based CD-ROM */
+        /* Monitor approach handles disc changes automatically */
+
         const track_t    *lo  = NULL;
 
         for (int i = (img->tracks_num - 1); i >= 0; i--) {
@@ -2594,6 +2623,49 @@ image_close(void *local)
     }
 }
 
+/* Device change detection functions */
+static void
+image_mark_as_device(cd_image_t *img, const char *device_path)
+{
+    img->is_device = 1;
+    strncpy(img->device_path, device_path, sizeof(img->device_path) - 1);
+    img->device_path[sizeof(img->device_path) - 1] = '\0';
+    image_log(img->log, "Marked image as device: %s\n", device_path);
+}
+
+static int
+image_reload_device(cd_image_t *img)
+{
+    if (!img->is_device) {
+        return 0;
+    }
+
+    image_log(img->log, "Reloading device image: %s\n", img->device_path);
+
+    /* Clear existing tracks */
+    image_clear_tracks(img);
+    img->tracks = NULL;
+    img->tracks_num = 0;
+    img->has_audio = 0;
+    img->is_dvd = 0;
+    img->has_dstruct = 0;
+
+    /* Reload the device as an ISO image */
+    int ret = image_load_iso(img, img->device_path);
+    
+    if (ret > 0) {
+        if (img->is_dvd == 2) {
+            uint32_t lb = image_get_last_block(img);
+            img->is_dvd = (lb >= 524287);
+        }
+        image_log(img->log, "Device successfully reloaded\n");
+        return 1;
+    } else {
+        image_log(img->log, "Failed to reload device\n");
+        return 0;
+    }
+}
+
 static const cdrom_ops_t image_ops = {
     image_get_track_info,
     image_get_raw_track_info,
@@ -2618,14 +2690,16 @@ image_open(cdrom_t *dev, const char *path)
 
     if (img != NULL) {
         int       ret;
-        const int is_cue  = ((ext == 4) && !stricmp(path + strlen(path) - ext + 1, "CUE"));
-        const int is_mds  = ((ext == 4) && !stricmp(path + strlen(path) - ext + 1, "MDS"));
-        char      n[1024] = { 0 };
+        const int is_cue    = ((ext == 4) && !stricmp(path + strlen(path) - ext + 1, "CUE"));
+        const int is_mds    = ((ext == 4) && !stricmp(path + strlen(path) - ext + 1, "MDS"));
+        const int is_device = (strncmp(path, "/dev/", 5) == 0);  /* Check if it's a device path */
+        char      n[1024]   = { 0 };
 
         sprintf(n, "CD-ROM %i Image", dev->id + 1);
         img->log          = log_open(n);
 
         img->dev          = dev;
+        img->is_device    = 0;  /* Initialize device flag */
 
         if (is_mds) {
             ret = image_load_mds(img, path);
@@ -2651,6 +2725,11 @@ image_open(cdrom_t *dev, const char *path)
                 img->has_audio = 0;
                 img->is_dvd = 2;
             }
+        }
+
+        /* Mark as device if it's a device path and loaded successfully */
+        if (is_device && ret > 0) {
+            image_mark_as_device(img, path);
         }
 
         if (ret > 0) {

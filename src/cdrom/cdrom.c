@@ -28,6 +28,9 @@
 #include <86box/config.h>
 #include <86box/cdrom.h>
 #include <86box/cdrom_image.h>
+#ifndef _WIN32
+#include <86box/cdrom_monitor.h>
+#endif
 #include <86box/cdrom_interface.h>
 #ifdef USE_CDROM_MITSUMI
 #include <86box/cdrom_mitsumi.h>
@@ -41,6 +44,7 @@
 #include <86box/scsi_cdrom.h>
 #include <86box/sound.h>
 #include <86box/ui.h>
+#include <86box/timer.h>
 
 #define RAW_SECTOR_SIZE    2352
 
@@ -51,6 +55,13 @@ cdrom_t cdrom[CDROM_NUM] = { 0 };
 
 int cdrom_interface_current;
 int cdrom_assigned_letters = 0;
+
+#ifndef _WIN32
+/* Global timer for CD-ROM device monitoring */
+static pc_timer_t cdrom_poll_timer;
+static int cdrom_timer_enabled = 0;
+#define CDROM_POLL_INTERVAL_USEC 1000000  /* 1 second */
+#endif
 
 #ifdef ENABLE_CDROM_LOG
 int cdrom_do_log = ENABLE_CDROM_LOG;
@@ -3125,6 +3136,20 @@ cdrom_hard_reset(void)
 
             dev->cached_sector = -1;
 
+#ifndef _WIN32
+            /* Initialize device monitor for device paths */
+            if (strlen(dev->image_path) > 0 && strncmp(dev->image_path, "/dev/", 5) == 0) {
+                dev->device_monitor = cdrom_monitor_init(i, dev->image_path);
+                if (dev->device_monitor) {
+                    cdrom_log(dev->log, "Device monitoring initialized for %s\n", dev->image_path);
+                } else {
+                    cdrom_log(dev->log, "Failed to initialize device monitoring for %s\n", dev->image_path);
+                }
+            } else {
+                dev->device_monitor = NULL;
+            }
+#endif
+
             if (strlen(dev->image_path) > 0) {
 #ifdef _WIN32
                 if ((strlen(dev->image_path) >= 1) && (dev->image_path[strlen(dev->image_path) - 1] == '/'))
@@ -3146,7 +3171,88 @@ cdrom_hard_reset(void)
     }
 
     sound_cd_thread_reset();
+
+#ifndef _WIN32
+    /* Initialize the CD-ROM polling timer */
+    cdrom_init_timer();
+#endif
 }
+
+#ifndef _WIN32
+/* Poll device monitors for disc changes and handle them automatically */
+void
+cdrom_poll_device_changes(void)
+{
+    for (uint8_t i = 0; i < CDROM_NUM; i++) {
+        cdrom_t *dev = &cdrom[i];
+        
+        if (dev->device_monitor) {
+            int disc_inserted = 0, disc_ejected = 0;
+            
+            if (cdrom_monitor_check_changes(dev->device_monitor, &disc_inserted, &disc_ejected)) {
+                if (disc_ejected) {
+                    cdrom_log(dev->log, "Auto-ejecting due to disc removal\n");
+                    /* Close current image */
+                    if (dev->local && dev->ops && dev->ops->close) {
+                        dev->ops->close(dev->local);
+                        dev->local = NULL;
+                        dev->ops = NULL;
+                    }
+                    dev->cd_status = CD_STATUS_EMPTY;
+                    dev->cached_sector = -1;
+                    cdrom_insert(i);  /* Signal disc change */
+                }
+                
+                if (disc_inserted) {
+                    cdrom_log(dev->log, "Auto-loading due to disc insertion\n");
+                    /* Load new disc */
+                    if (cdrom_load(dev, dev->image_path, 0) == 0) {
+                        cdrom_log(dev->log, "Successfully loaded new disc\n");
+                    } else {
+                        cdrom_log(dev->log, "Failed to load new disc\n");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* Timer callback function */
+static void
+cdrom_timer_callback(void *priv)
+{
+    (void)priv; /* Unused parameter */
+    
+    /* Poll for device changes */
+    cdrom_poll_device_changes();
+    
+    /* Reschedule the timer */
+    if (cdrom_timer_enabled) {
+        timer_on_auto(&cdrom_poll_timer, CDROM_POLL_INTERVAL_USEC);
+    }
+}
+
+/* Initialize the CD-ROM polling timer */
+void
+cdrom_init_timer(void)
+{
+    if (!cdrom_timer_enabled) {
+        timer_add(&cdrom_poll_timer, cdrom_timer_callback, NULL, 0);
+        timer_on_auto(&cdrom_poll_timer, CDROM_POLL_INTERVAL_USEC);
+        cdrom_timer_enabled = 1;
+    }
+}
+
+/* Stop the CD-ROM polling timer */
+void
+cdrom_stop_timer(void)
+{
+    if (cdrom_timer_enabled) {
+        timer_stop(&cdrom_poll_timer);
+        cdrom_timer_enabled = 0;
+    }
+}
+#endif
 
 void
 cdrom_close(void)
@@ -3167,6 +3273,14 @@ cdrom_close(void)
 
         cdrom_drive_reset(dev);
 
+#ifndef _WIN32
+        /* Close device monitor if present */
+        if (dev->device_monitor) {
+            cdrom_monitor_close(dev->device_monitor);
+            dev->device_monitor = NULL;
+        }
+#endif
+
         if (dev->log != NULL) {
             cdrom_log(dev->log, "Log closed\n");
 
@@ -3174,6 +3288,11 @@ cdrom_close(void)
             dev->log = NULL;
         }
     }
+
+#ifndef _WIN32
+    /* Stop the CD-ROM polling timer */
+    cdrom_stop_timer();
+#endif
 }
 
 /* Signal disc change to the emulated machine. */

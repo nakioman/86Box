@@ -19,6 +19,12 @@
 #include <86box/version.h>
 #endif
 
+#ifndef _WIN32
+#ifndef CDROM_MONITOR_H
+#include <86box/cdrom_monitor.h>
+#endif
+#endif
+
 #define CDROM_NUM                   8
 
 #define CD_STATUS_EMPTY             0
@@ -341,6 +347,10 @@ typedef struct cdrom {
     void              *local;
     void              *log;
 
+#ifndef _WIN32
+    void              *device_monitor;  /* CD-ROM device monitor for automatic disc change handling */
+#endif
+
     void               (*insert)(void *priv);
     void               (*close)(void *priv);
     uint32_t           (*get_volume)(void *p, int channel);
@@ -470,6 +480,12 @@ extern void            cdrom_exit(const uint8_t id);
 extern int             cdrom_is_empty(const uint8_t id);
 extern void            cdrom_eject(const uint8_t id);
 extern void            cdrom_reload(const uint8_t id);
+
+#ifndef _WIN32
+extern void            cdrom_poll_device_changes(void);
+extern void            cdrom_init_timer(void);
+extern void            cdrom_stop_timer(void);
+#endif
 
 extern void            cdrom_compute_ecc_block(cdrom_t *dev, uint8_t *parity, const uint8_t *data,
                                                uint32_t major_count, uint32_t minor_count,

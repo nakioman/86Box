@@ -25,7 +25,15 @@ add_library(cdrom OBJECT
     cdrom_image_viso.c
     cdrom_mke.c
 )
-target_link_libraries(86Box PkgConfig::SNDFILE)
+
+# Add device support for non-Windows platforms
+if(NOT WIN32)
+    target_sources(cdrom PRIVATE 
+        cdrom_image_device.c 
+        cdrom_monitor.c
+    )
+endif()
+target_link_libraries(86Box PkgConfig::SNDFILE ${HTTP_LIBRARIES})
 
 if(CDROM_MITSUMI)
     target_compile_definitions(cdrom PRIVATE USE_CDROM_MITSUMI)
