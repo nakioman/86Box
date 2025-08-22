@@ -439,6 +439,8 @@ plat_pause(int p)
     }
 
     if ((!!p) == dopause) {
+        QTimer::singleShot(0, main_window, &MainWindow::updateUiPauseState);
+
 #ifdef Q_OS_WINDOWS
         if (source_hwnd)
             PostMessage((HWND) (uintptr_t) source_hwnd, WM_SENDSTATUS, (WPARAM) !!p, (LPARAM) (HWND) main_window->winId());
@@ -690,6 +692,13 @@ plat_get_temp_dir(char *outbuf, const uint8_t len)
 {
     const auto dir = QDir(QStandardPaths::standardLocations(QStandardPaths::TempLocation)[0]);
     strncpy(outbuf, dir.canonicalPath().toUtf8().constData(), len);
+}
+
+void
+plat_get_vmm_dir(char *outbuf, const size_t len)
+{
+    const auto path = QDir::home().filePath("86Box VMs");
+    strncpy(outbuf, path.toUtf8().constData(), len);
 }
 
 void

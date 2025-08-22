@@ -135,7 +135,7 @@ msgstr ""
 msgid "4:&3 Integer scale"
 msgstr ""
 
-msgid "E&GA/(S)VGA settings"
+msgid "EGA/(S)&VGA settings"
 msgstr ""
 
 msgid "&Inverted VGA monitor"
@@ -2935,4 +2935,25 @@ msgid "The system will not be added."
 msgstr ""
 
 msgid "&Update mouse every CPU frame"
+msgstr ""
+
+msgid "Hue"
+msgstr ""
+
+msgid "Saturation"
+msgstr ""
+
+msgid "Contrast"
+msgstr ""
+
+msgid "Brightness"
+msgstr ""
+
+msgid "Sharpness"
+msgstr ""
+
+msgid "&CGA composite settings..."
+msgstr ""
+
+msgid "CGA composite settings"
 msgstr ""

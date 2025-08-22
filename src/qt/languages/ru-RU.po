@@ -135,8 +135,8 @@ msgstr "&Целочисленное масштабирование"
 msgid "4:&3 Integer scale"
 msgstr "4:&3 Целочисленное масштабирование"
 
-msgid "E&GA/(S)VGA settings"
-msgstr "Настройки E&GA/(S)VGA"
+msgid "EGA/(S)&VGA settings"
+msgstr "Настройки EGA/(S)&VGA"
 
 msgid "&Inverted VGA monitor"
 msgstr "&Инвертировать цвета VGA"
@@ -2937,14 +2937,23 @@ msgstr "Система не будет добавлена."
 msgid "&Update mouse every CPU frame"
 msgstr "&Обновлять мышь при каждом кадре ЦП"
 
-#~ msgid "HD Controller:"
-#~ msgstr "Контроллер HD:"
+msgid "Hue"
+msgstr "Тон"
 
-#~ msgid "ZIP drives:"
-#~ msgstr "ZIP дисководы:"
+msgid "Saturation"
+msgstr "Насыщенность"
 
-#~ msgid "ZIP %1 %2 (%3): %4"
-#~ msgstr "ZIP %1 %2 (%3): %4"
+msgid "Contrast"
+msgstr "Контраст"
 
-#~ msgid "ZIP images"
-#~ msgstr "Образы ZIP"
+msgid "Brightness"
+msgstr "Яркость"
+
+msgid "Sharpness"
+msgstr "Резкость"
+
+msgid "&CGA composite settings..."
+msgstr "Настройки композитного видео &CGA..."
+
+msgid "CGA composite settings"
+msgstr "Настройки композитного видео CGA"

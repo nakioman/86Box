@@ -135,8 +135,8 @@ msgstr "Escala &inteira"
 msgid "4:&3 Integer scale"
 msgstr "Escala inteira 4:&3"
 
-msgid "E&GA/(S)VGA settings"
-msgstr "Definições E&GA/(S)VGA"
+msgid "EGA/(S)&VGA settings"
+msgstr "Definições EGA/(S)&VGA"
 
 msgid "&Inverted VGA monitor"
 msgstr "Monitor VGA &invertido"
@@ -2212,10 +2212,7 @@ msgid "Display type"
 msgstr "Tipo de ecrã"
 
 msgid "Composite type"
-msgstr "Tipo composto"
-
-msgid "True color"
-msgstr "Cor verdadeira"
+msgstr "Tipo compósito"
 
 msgid "RGB type"
 msgstr "Tipo RGB"
@@ -2447,6 +2444,9 @@ msgstr "256 KB"
 
 msgid "Composite"
 msgstr "Compósito"
+
+msgid "True color"
+msgstr "Cor verdadeira"
 
 msgid "Old"
 msgstr "Antigo"
@@ -2937,14 +2937,23 @@ msgstr "O sistema não será adicionado."
 msgid "&Update mouse every CPU frame"
 msgstr "&Atualiza o estado do rato em cada bloco do CPU"
 
-#~ msgid "HD Controller:"
-#~ msgstr "Controlador HD:"
+msgid "Hue"
+msgstr "Matiz"
 
-#~ msgid "ZIP drives:"
-#~ msgstr "Unidades ZIP:"
+msgid "Saturation"
+msgstr "Saturação"
 
-#~ msgid "ZIP %1 %2 (%3): %4"
-#~ msgstr "ZIP %1 %2 (%3): %4"
+msgid "Contrast"
+msgstr "Contraste"
 
-#~ msgid "ZIP images"
-#~ msgstr "Imagens ZIP"
+msgid "Brightness"
+msgstr "Brilho"
+
+msgid "Sharpness"
+msgstr "Nitidez"
+
+msgid "&CGA composite settings..."
+msgstr "Definições do modo compósito &CGA..."
+
+msgid "CGA composite settings"
+msgstr "Definições do modo compósito CGA"

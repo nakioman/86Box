@@ -135,8 +135,8 @@ msgstr "&Integerschaal"
 msgid "4:&3 Integer scale"
 msgstr "4:&3 integerschaal"
 
-msgid "E&GA/(S)VGA settings"
-msgstr "E&GA/(S)VGA-instellingen"
+msgid "EGA/(S)&VGA settings"
+msgstr "EGA/(S)&VGA-instellingen"
 
 msgid "&Inverted VGA monitor"
 msgstr "Ge&ïnverteerde VGA-monitor"
@@ -2937,14 +2937,23 @@ msgstr "Het systeem wordt niet toegevoegd."
 msgid "&Update mouse every CPU frame"
 msgstr "&Muis bijwerken bij elk CPU-frame"
 
-#~ msgid "HD Controller:"
-#~ msgstr "HD-controller:"
+msgid "Hue"
+msgstr "Kleurtoon"
 
-#~ msgid "ZIP drives:"
-#~ msgstr "ZIP-schijven:"
+msgid "Saturation"
+msgstr "Verzadiging"
 
-#~ msgid "ZIP %1 %2 (%3): %4"
-#~ msgstr "ZIP %1 %2 (%3): %4"
+msgid "Contrast"
+msgstr "Contrast"
 
-#~ msgid "ZIP images"
-#~ msgstr "ZIP-images"
+msgid "Brightness"
+msgstr "Helderheid"
+
+msgid "Sharpness"
+msgstr "Scherpte"
+
+msgid "&CGA composite settings..."
+msgstr "Instellingen van de &CGA-compositemodus..."
+
+msgid "CGA composite settings"
+msgstr "Instellingen van de CGA-compositemodus"

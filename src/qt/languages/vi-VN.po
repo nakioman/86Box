@@ -135,8 +135,8 @@ msgstr "Căn tỷ lệ số nguyên"
 msgid "4:&3 Integer scale"
 msgstr "Căn tỷ lệ 4:3 số nguyên"
 
-msgid "E&GA/(S)VGA settings"
-msgstr "Cài đặt EGA/(S)VGA"
+msgid "EGA/(S)&VGA settings"
+msgstr "Cài đặt EGA/(S)&VGA"
 
 msgid "&Inverted VGA monitor"
 msgstr "Đảo mà&u VGA"
@@ -2937,14 +2937,23 @@ msgstr "Hệ thống sẽ không được thêm."
 msgid "&Update mouse every CPU frame"
 msgstr "&Cập nhật chuột mỗi cỡ khung CPU"
 
-#~ msgid "HD Controller:"
-#~ msgstr "Bộ điều khiển ổ cứng:"
+msgid "Hue"
+msgstr "Màu sắc"
 
-#~ msgid "ZIP drives:"
-#~ msgstr "Ổ đĩa ZIP:"
+msgid "Saturation"
+msgstr "Độ bão hòa"
 
-#~ msgid "ZIP %1 %2 (%3): %4"
-#~ msgstr "ZIP %1 %2 (%3): %4"
+msgid "Contrast"
+msgstr "Sự tương phản"
 
-#~ msgid "ZIP images"
-#~ msgstr "Ảnh đĩa ZIP"
+msgid "Brightness"
+msgstr "Độ sáng"
+
+msgid "Sharpness"
+msgstr "Độ sắc nét"
+
+msgid "&CGA composite settings..."
+msgstr "Cài đặt chế độ tổng hợp &CGA..."
+
+msgid "CGA composite settings"
+msgstr "Cài đặt chế độ tổng hợp CGA"
