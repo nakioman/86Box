@@ -26,6 +26,7 @@
 #include <assert.h>
 #include <wchar.h>
 #define HAVE_STDARG_H
+#define ENABLE_D86F_LOG 1
 #include <86box/86box.h>
 #include <86box/timer.h>
 #include <86box/crc.h>
@@ -1633,16 +1634,26 @@ d86f_read_sector_data(int drive, int side)
                     }
                 }
                 crc16_calc(dev->crc_table, data, &(dev->calc_crc));
-            } else if (dev->data_find.bytes_obtained < crc_pos)
-                dev->track_crc.bytes[(dev->data_find.bytes_obtained - sector_len) ^ 1] =
-                decodefm(drive, dev->last_word[side]);
+            } else if (dev->data_find.bytes_obtained < crc_pos) {
+                uint8_t crc_byte = decodefm(drive, dev->last_word[side]);
+                dev->track_crc.bytes[(dev->data_find.bytes_obtained - sector_len) ^ 1] = crc_byte;
+                d86f_log("86F: Reading CRC byte[%d] = 0x%02X from track (word=0x%04X)\n",
+                         (dev->data_find.bytes_obtained - sector_len) ^ 1, crc_byte, dev->last_word[side]);
+            }
             dev->data_find.bytes_obtained++;
 
             if (dev->data_find.bytes_obtained == (crc_pos + fdc_get_gap(d86f_fdc))) {
                 /* We've got the data. */
+                d86f_log("86F: CRC Check - calc_crc=0x%04X, track_crc=0x%04X, state=0x%02X, crc_pos=%d, gap=%d\n", 
+                         dev->calc_crc.word, dev->track_crc.word, dev->state, crc_pos, fdc_get_gap(d86f_fdc));
+                d86f_log("86F: CRC Check - bytes_obtained=%d, sector=%08X\n", 
+                         dev->data_find.bytes_obtained, dev->last_sector.dword);
+                
                 if ((dev->calc_crc.word != dev->track_crc.word) && (dev->state != STATE_02_READ_DATA)) {
                     d86f_log("86F: Data CRC error: %04X != %04X (%08X)\n", dev->track_crc.word,
                              dev->calc_crc.word, dev->last_sector.dword);
+                    d86f_log("86F: CRC Error Debug - crc_pos=%d, data_len=%d, total_bytes=%d\n",
+                             crc_pos, d86f_get_data_len(fdc_get_drive(d86f_fdc)), dev->data_find.bytes_obtained);
                     dev->data_find.sync_marks = dev->data_find.bits_obtained =
                     dev->data_find.bytes_obtained = 0;
                     dev->error_condition          = 0;
