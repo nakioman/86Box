@@ -1,0 +1,116 @@
+#
+# 86Box v5.0 logfile, created 2025/08/22 16:49:52
+#
+# Emulator path: /home/nacho/Projects/86Box/build/src/
+# Global configuration file: 86box_global.cfg
+# VM: 486DX33
+#
+# Configuration file: /home/nacho/Boxes/486DX33/86box.cfg
+#
+
+# Userfiles path: /home/nacho/Boxes/486DX33/
+# ROM path: /home/nacho/Boxes/486DX33/roms/
+# ROM path: /home/nacho/Projects/86Box/build/src/roms/
+# ROM path: /root/.local/share/86Box/roms/
+# ROM path: /usr/local/share/86Box/roms/
+# ROM path: /usr/share/86Box/roms/
+[HTTPD] HTTP server initialized
+[HTTPD] HTTP server started on port 8080
+USB_FDD: Loading USB floppy device 0 from '/dev/sda'
+USB_FDD: Detected geometry from size 1474560 - tracks: 80, heads: 2, sectors: 18
+USB_FDD: Initial disk_flags after geometry detection: 0x0008
+USB_FDD: Track flags setup: temp_rate=0, MFM=0x08, data_rate=0, RPM_flag=no
+USB_FDD: Final track_flags = 0x0008
+USB_FDD: Calculated gap sizes - gap2: 22, gap3: 108, data_rate: 0
+USB_FDD: Applied hole flags: rate_index=4, holes[4] << 1 = 0x02, combined disk_flags: 0x008A
+USB_FDD: Final disk_flags after gap calculation: 0x008A
+USB_FDD: Initialized d86f engine for drive 0
+USB_FDD: Successfully loaded USB floppy device
+USB_FDD: Seeking drive 0 to track 0
+USB_FDD: disk_flags requested for drive 0: 0x008A
+*** 2 repeats ***
+USB_FDD: side_flags for drive 0: data_rate=0, flags=0x0008
+*** 2 repeats ***
+USB_FDD: disk_flags requested for drive 0: 0x008A
+*** 1 repeats ***
+USB_FDD: side_flags for drive 0: data_rate=0, flags=0x0008
+*** 1 repeats ***
+USB_FDD: Building track 0 side 0
+USB_FDD: Reading T:0 H:0 S:1 -> absolute sector 0, offset 0
+USB_FDD: Successfully read sector 0 (512 bytes)
+USB_FDD: First 16 bytes of sector 0: EB 3C 90 4D 53 44 4F 53 35 2E 30 00 02 01 *** 1 repeats ***
+00 
+USB_FDD: Reading T:0 H:0 S:2 -> absolute sector 1, offset 512
+USB_FDD: Successfully read sector 1 (512 bytes)
+USB_FDD: Reading T:0 H:0 S:3 -> absolute sector 2, offset 1024
+USB_FDD: Successfully read sector 2 (512 bytes)
+USB_FDD: Reading T:0 H:0 S:4 -> absolute sector 3, offset 1536
+USB_FDD: Successfully read sector 3 (512 bytes)
+USB_FDD: Reading T:0 H:0 S:5 -> absolute sector 4, offset 2048
+USB_FDD: Successfully read sector 4 (512 bytes)
+USB_FDD: Reading T:0 H:0 S:6 -> absolute sector 5, offset 2560
+USB_FDD: Successfully read sector 5 (512 bytes)
+USB_FDD: Reading T:0 H:0 S:7 -> absolute sector 6, offset 3072
+USB_FDD: Successfully read sector 6 (512 bytes)
+USB_FDD: Reading T:0 H:0 S:8 -> absolute sector 7, offset 3584
+USB_FDD: Successfully read sector 7 (512 bytes)
+USB_FDD: Reading T:0 H:0 S:9 -> absolute sector 8, offset 4096
+USB_FDD: Successfully read sector 8 (512 bytes)
+USB_FDD: Reading T:0 H:0 S:10 -> absolute sector 9, offset 4608
+USB_FDD: Successfully read sector 9 (512 bytes)
+USB_FDD: Reading T:0 H:0 S:11 -> absolute sector 10, offset 5120
+USB_FDD: Successfully read sector 10 (512 bytes)
+USB_FDD: Reading T:0 H:0 S:12 -> absolute sector 11, offset 5632
+USB_FDD: Successfully read sector 11 (512 bytes)
+USB_FDD: Reading T:0 H:0 S:13 -> absolute sector 12, offset 6144
+USB_FDD: Successfully read sector 12 (512 bytes)
+USB_FDD: Reading T:0 H:0 S:14 -> absolute sector 13, offset 6656
+USB_FDD: Successfully read sector 13 (512 bytes)
+USB_FDD: Reading T:0 H:0 S:15 -> absolute sector 14, offset 7168
+USB_FDD: Successfully read sector 14 (512 bytes)
+USB_FDD: Reading T:0 H:0 S:16 -> absolute sector 15, offset 7680
+USB_FDD: Successfully read sector 15 (512 bytes)
+USB_FDD: Reading T:0 H:0 S:17 -> absolute sector 16, offset 8192
+USB_FDD: Successfully read sector 16 (512 bytes)
+USB_FDD: Reading T:0 H:0 S:18 -> absolute sector 17, offset 8704
+USB_FDD: Successfully read sector 17 (512 bytes)
+USB_FDD: Building track 0 side 1
+USB_FDD: Reading T:0 H:1 S:1 -> absolute sector 18, offset 9216
+USB_FDD: Successfully read sector 18 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:2 -> absolute sector 19, offset 9728
+USB_FDD: Successfully read sector 19 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:3 -> absolute sector 20, offset 10240
+USB_FDD: Successfully read sector 20 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:4 -> absolute sector 21, offset 10752
+USB_FDD: Successfully read sector 21 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:5 -> absolute sector 22, offset 11264
+USB_FDD: Successfully read sector 22 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:6 -> absolute sector 23, offset 11776
+USB_FDD: Successfully read sector 23 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:7 -> absolute sector 24, offset 12288
+USB_FDD: Successfully read sector 24 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:8 -> absolute sector 25, offset 12800
+USB_FDD: Successfully read sector 25 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:9 -> absolute sector 26, offset 13312
+USB_FDD: Successfully read sector 26 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:10 -> absolute sector 27, offset 13824
+USB_FDD: Successfully read sector 27 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:11 -> absolute sector 28, offset 14336
+USB_FDD: Successfully read sector 28 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:12 -> absolute sector 29, offset 14848
+USB_FDD: Successfully read sector 29 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:13 -> absolute sector 30, offset 15360
+USB_FDD: Successfully read sector 30 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:14 -> absolute sector 31, offset 15872
+USB_FDD: Successfully read sector 31 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:15 -> absolute sector 32, offset 16384
+USB_FDD: Successfully read sector 32 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:16 -> absolute sector 33, offset 16896
+USB_FDD: Successfully read sector 33 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:17 -> absolute sector 34, offset 17408
+USB_FDD: Successfully read sector 34 (512 bytes)
+USB_FDD: Reading T:0 H:1 S:18 -> absolute sector 35, offset 17920
+USB_FDD: Successfully read sector 35 (512 bytes)
+USB_FDD: Completed seek to track 0
+P1 = B1
+USB_FDD: Closing USB floppy device 0

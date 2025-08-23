@@ -100,6 +100,8 @@ extern int video_fps; /* (O) render speed in fps */
 #endif
 extern int settings_only;     /* (O) show only the settings dialog */
 extern int confirm_exit_cmdl; /* (O) do not ask for confirmation on quit if set to 0 */
+extern int httpd_enabled;     /* (O) enable HTTP server */
+extern int httpd_port;        /* (O) HTTP server port */
 #ifdef _WIN32
 extern uint64_t unique_id;
 extern uint64_t source_hwnd;

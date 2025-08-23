@@ -94,6 +94,7 @@
 #include <86box/cdrom_image.h>
 #include <86box/thread.h>
 #include <86box/network.h>
+#include <86box/httpd.h>
 #include <86box/sound.h>
 #include <86box/midi.h>
 #include <86box/snd_speaker.h>
@@ -138,6 +139,8 @@ int video_fps = RENDER_FPS; /* (O) render speed in fps */
 #endif
 int settings_only     = 0; /* (O) show only the settings dialog */
 int confirm_exit_cmdl = 1; /* (O) do not ask for confirmation on quit if set to 0 */
+int httpd_enabled     = 0; /* (O) enable HTTP server */
+int httpd_port        = 8686; /* (O) HTTP server port */
 #ifdef _WIN32
 uint64_t unique_id   = 0;
 uint64_t source_hwnd = 0;
@@ -672,6 +675,7 @@ pc_show_usage(char *s)
             "-Y or --donothing\t\t- do not show any UI or run the emulation\n"
 #endif
             "-Z or --lastvmpath\t\t- the last param. is VM path rather than config\n"
+            "--httpd [port]\t\t\t- enable HTTP API server on port (default: 8686)\n"
             "\nA config file can be specified. If none is, the default file will be used.\n",
             s);
 
@@ -856,6 +860,14 @@ usage:
             dump_missing = 1;
         } else if (!strcasecmp(argv[c], "--donothing") || !strcasecmp(argv[c], "-Y")) {
             do_nothing = 1;
+        } else if (!strcasecmp(argv[c], "--httpd")) {
+            httpd_enabled = 1;
+            if ((c + 1) < argc && argv[c + 1][0] != '-') {
+                httpd_port = atoi(argv[++c]);
+                if (httpd_port <= 0 || httpd_port > 65535) {
+                    httpd_port = 8686;
+                }
+            }
         } else if (!strcasecmp(argv[c], "--nohook") || !strcasecmp(argv[c], "-W")) {
             hook_enabled = 0;
         } else if (!strcasecmp(argv[c], "--clearboth") || !strcasecmp(argv[c], "-X")) {
@@ -1162,6 +1174,12 @@ usage:
             }
         }
     }
+        
+    /* Start HTTP server if enabled */
+    if (httpd_enabled) {
+        httpd_init();
+        httpd_start(httpd_port);
+    }
 
     /* Load the desired language */
     if (lang_init)
@@ -1347,7 +1365,7 @@ pc_init_modules(void)
     if (do_nothing) {
         do_nothing = 0;
         exit(-1);
-    }
+    }    
 
     return 1;
 }
@@ -1738,6 +1756,8 @@ pc_close(UNUSED(thread_t *ptr))
     midi_in_close();
 
     network_close();
+
+    httpd_close();
 
     sound_cd_thread_end();
 

@@ -33,6 +33,7 @@ list(APPEND net_sources
     net_rtl8139.c
     net_l80225.c
     net_modem.c
+    httpd.c
     utils/getline.c
 )
 
@@ -90,6 +91,12 @@ if (UNIX AND NOT APPLE) # Support for TAP on Linux and BSD, supposedly.
     else()
         message(WARNING "TAP support not available. Are you on some BSD?")
     endif()
+endif()
+
+# Link pthread for HTTP server on Unix systems
+if(UNIX)
+    find_package(Threads REQUIRED)
+    target_link_libraries(86Box Threads::Threads)
 endif()
 
 add_library(net OBJECT ${net_sources})
