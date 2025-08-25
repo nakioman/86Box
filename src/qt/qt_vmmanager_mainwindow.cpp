@@ -116,6 +116,35 @@ VMManagerMainWindow(QWidget *parent)
     // Inform the main view when preferences are updated
     connect(this, &VMManagerMainWindow::preferencesUpdated, vmm, &VMManagerMain::onPreferencesUpdated);
     connect(this, &VMManagerMainWindow::languageUpdated, vmm, &VMManagerMain::onLanguageUpdated);
+#ifdef Q_OS_WINDOWS
+    connect(this, &VMManagerMainWindow::darkModeUpdated, vmm, &VMManagerMain::onDarkModeUpdated);
+#endif
+
+    {
+        auto config = new VMManagerConfig(VMManagerConfig::ConfigType::General);
+        this->ui->actionRemember_size_and_position->setChecked(!!config->getStringValue("window_remember").toInt());
+        if (ui->actionRemember_size_and_position->isChecked()) {
+            QStringList list = config->getStringValue("window_coordinates").split(',');
+            for (auto& cur : list) {
+                cur = cur.trimmed();
+            }
+            QRect geom;
+            geom.setX(list[0].toInt());
+            geom.setY(list[1].toInt());
+            geom.setWidth(list[2].toInt());
+            geom.setHeight(list[3].toInt());
+
+            setGeometry(geom);
+            if (!!config->getStringValue("window_maximized").toInt()) {
+                setWindowState(windowState() | Qt::WindowMaximized);
+            }
+        } else {
+            config->setStringValue("window_remember", "");
+            config->setStringValue("window_coordinates", "");
+            config->setStringValue("window_maximized", "");
+        }
+        delete config;
+    }
 
 }
 
@@ -164,6 +193,15 @@ VMManagerMainWindow::saveSettings() const
     const auto currentSelection = vmm->getCurrentSelection();
     const auto config = new VMManagerConfig(VMManagerConfig::ConfigType::General);
     config->setStringValue("last_selection", currentSelection);
+    config->setStringValue("window_remember", QString::number(ui->actionRemember_size_and_position->isChecked()));
+    if (ui->actionRemember_size_and_position->isChecked()) {
+        config->setStringValue("window_coordinates", QString::asprintf("%i, %i, %i, %i", this->geometry().x(), this->geometry().y(), this->geometry().width(), this->geometry().height()));
+        config->setStringValue("window_maximized", this->isMaximized() ? "1" : "");
+    } else {
+        config->setStringValue("window_remember", "");
+        config->setStringValue("window_coordinates", "");
+        config->setStringValue("window_maximized", "");
+    }
     // Sometimes required to ensure the settings save before the app exits
     config->sync();
 }
@@ -177,6 +215,15 @@ VMManagerMainWindow::updateLanguage()
     setWindowTitle(tr("%1 VM Manager").arg(EMU_NAME));
     emit languageUpdated();
 }
+
+
+#ifdef Q_OS_WINDOWS
+void
+VMManagerMainWindow::updateDarkMode()
+{
+    emit darkModeUpdated();
+}
+#endif
 
 void
 VMManagerMainWindow::changeEvent(QEvent *event)

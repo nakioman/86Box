@@ -440,7 +440,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>F&amp;orce 4:3 display ratio</string>
+    <string>Force &amp;4:3 display ratio</string>
    </property>
   </action>
   <action name="actionHiDPI_scaling">
@@ -857,7 +857,7 @@
   </action>
   <action name="actionOpen_printer_tray">
    <property name="text">
-    <string>Open &amp;printer tray...</string>
+    <string>Open p&amp;rinter tray...</string>
    </property>
   </action>
   <action name="actionOpen_screenshots_folder">

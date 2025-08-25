@@ -147,7 +147,7 @@ VMManagerMain::VMManagerMain(QWidget *parent) :
                 connect(buttonBox, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
                 connect(buttonBox, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
                 layout->addWidget(buttonBox);
-                connect(edit, &QLineEdit::textChanged, this, [this, errLabel, buttonBox] (const QString& text) {
+                connect(edit, &QLineEdit::textChanged, this, [errLabel, buttonBox] (const QString& text) {
                     bool isSpaceOnly = true;
 #ifdef Q_OS_WINDOWS
                     const char illegalChars[] = "<>:\"|?*\\/";
@@ -218,7 +218,7 @@ illegal_chars:
                     QString srcPath = selected_sysconfig->config_dir;
                     QString dstPath = vmDir;
 
-                    std::thread copyThread([this, &finished, srcPath, dstPath, &errCode] {
+                    std::thread copyThread([&finished, srcPath, dstPath, &errCode] {
                         errCode = copyPath(srcPath, dstPath, true);
                         finished = true;
                     });
@@ -285,7 +285,7 @@ illegal_chars:
 
             QAction deleteAction(tr("&Delete"));
             contextMenu.addAction(&deleteAction);
-            connect(&deleteAction, &QAction::triggered, [this, parent] {
+            connect(&deleteAction, &QAction::triggered, [this] {
                 deleteSystem(selected_sysconfig);
             });
             deleteAction.setEnabled(selected_sysconfig->process->state() == QProcess::NotRunning);
@@ -304,7 +304,7 @@ illegal_chars:
                 }
             });
 
-            QAction openPrinterFolderAction(tr("Open &printer tray..."));
+            QAction openPrinterFolderAction(tr("Open p&rinter tray..."));
             contextMenu.addAction(&openPrinterFolderAction);
             connect(&openPrinterFolderAction, &QAction::triggered, [indexAt] {
                 if (const auto printerDir = indexAt.data(VMManagerModel::Roles::ConfigDir).toString() + QString("/printer/"); !printerDir.isEmpty()) {
@@ -349,7 +349,7 @@ illegal_chars:
     });
 
     // Initial default details view
-    vm_details = new VMManagerDetails();
+    vm_details = new VMManagerDetails(ui->detailsArea);
     ui->detailsArea->layout()->addWidget(vm_details);
     const QItemSelectionModel *selection_model = ui->listView->selectionModel();
 
@@ -601,7 +601,7 @@ VMManagerMain::addNewSystem(const QString &name, const QString &dir, const QStri
     const auto newSystemDirectory = QDir(QDir::cleanPath(dir + "/" + name));
 
     // qt replaces `/` with native separators
-    const auto newSystemConfigFile = QFileInfo(newSystemDirectory.path() + "/" + "86box.cfg");
+    const auto newSystemConfigFile = QFileInfo(newSystemDirectory.path() + "/" + CONFIG_FILE);
     if (newSystemConfigFile.exists() || newSystemDirectory.exists()) {
         QMessageBox::critical(this, tr("Directory in use"), tr("The selected directory is already in use. Please select a different directory."));
         return;
@@ -774,6 +774,7 @@ void
 VMManagerMain::onLanguageUpdated()
 {
     vm_model->refreshConfigs();
+    modelDataChange();
     /* Hack to work around details widgets not being re-translatable
        without going through layers of abstraction */
     ui->detailsArea->layout()->removeWidget(vm_details);
@@ -783,6 +784,14 @@ VMManagerMain::onLanguageUpdated()
     if (vm_model->rowCount(QModelIndex()) > 0)
         vm_details->updateData(selected_sysconfig);
 }
+
+#ifdef Q_OS_WINDOWS
+void
+VMManagerMain::onDarkModeUpdated()
+{
+    vm_details->updateStyle();
+}
+#endif
 
 int
 VMManagerMain::getActiveMachineCount()
@@ -810,7 +819,7 @@ VMManagerMain::backgroundUpdateCheckComplete(const UpdateCheck::UpdateResult &re
     qDebug() << "Check complete: update available?" << result.updateAvailable;
     if (result.updateAvailable) {
         auto type = result.channel == UpdateCheck::UpdateChannel::CI ? tr("build") : tr("version");
-        const auto updateMessage = QString("An update to 86Box is available: %1 %2").arg(type, result.latestVersion);
+        const auto updateMessage = tr("An update to 86Box is available: %1 %2").arg(type, result.latestVersion);
         emit updateStatusLeft(updateMessage);
     }
 }

@@ -197,7 +197,7 @@ MainWindow::MainWindow(QWidget *parent)
     QTimer* frameRateTimer = new QTimer(this);
     frameRateTimer->setInterval(1000);
     frameRateTimer->setSingleShot(false);
-    connect(frameRateTimer, &QTimer::timeout, [this, hertz_label] {
+    connect(frameRateTimer, &QTimer::timeout, [hertz_label] {
         hertz_label->setText(tr("%1 Hz").arg(QString::number(monitors[0].mon_actualrenderedframes.load()) + (monitors[0].mon_interlace ? "i" : "")));
     });
     statusBar()->addPermanentWidget(hertz_label);
@@ -306,7 +306,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     connect(this, &MainWindow::showMessageForNonQtThread, this, &MainWindow::showMessage_, Qt::QueuedConnection);
 
-    connect(this, &MainWindow::setTitle, this, [this, toolbar_label](const QString &title) {
+    connect(this, &MainWindow::setTitle, this, [toolbar_label](const QString &title) {
         if (dopause && !hide_tool_bar) {
             toolbar_label->setText(toolbar_label->text() + tr(" - PAUSED"));
             return;
@@ -1655,11 +1655,12 @@ MainWindow::focusOutEvent(QFocusEvent *event)
 void
 MainWindow::on_actionResizable_window_triggered(bool checked)
 {
+    hide();
     if (checked) {
         vid_resize = 1;
-        setWindowFlag(Qt::WindowMaximizeButtonHint, true);
-        setWindowFlag(Qt::MSWindowsFixedSizeDialogHint, false);
         setFixedSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+        setWindowFlag(Qt::MSWindowsFixedSizeDialogHint, false);
+        setWindowFlag(Qt::WindowMaximizeButtonHint, true);
         for (int i = 1; i < MONITORS_NUM; i++) {
             if (monitors[i].target_buffer) {
                 renderers[i]->setWindowFlag(Qt::WindowMaximizeButtonHint, true);
@@ -1985,9 +1986,12 @@ MainWindow::on_actionCGA_PCjr_Tandy_EGA_S_VGA_overscan_triggered()
 void
 MainWindow::on_actionChange_contrast_for_monochrome_display_triggered()
 {
+    startblit();
     vid_cga_contrast ^= 1;
-    cgapal_rebuild();
+    for (int i = 0; i < MONITORS_NUM; i++)
+        cgapal_rebuild_monitor(i);
     config_save();
+    endblit();
 }
 
 void

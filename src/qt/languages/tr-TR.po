@@ -66,8 +66,8 @@ msgstr "&VNC"
 msgid "Specify &dimensions..."
 msgstr "Pencere &boyutunu belirle..."
 
-msgid "F&orce 4:3 display ratio"
-msgstr "4:3 görüntü oranına &zorla"
+msgid "Force &4:3 display ratio"
+msgstr "&4:3 görüntü oranına zorla"
 
 msgid "&Window scale factor"
 msgstr "Pencere &boyutu ölçeği"
@@ -774,11 +774,11 @@ msgstr "Bağlantı noktaları (COM & LPT)"
 msgid "Ports"
 msgstr "Bağlantı noktaları"
 
-msgid "Serial ports"
-msgstr "Seri bağlantı noktaları"
+msgid "Serial ports:"
+msgstr "Seri bağlantı noktaları:"
 
-msgid "Parallel ports"
-msgstr "Paralel bağlantı noktaları"
+msgid "Parallel ports:"
+msgstr "Paralel bağlantı noktaları:"
 
 msgid "Storage controllers"
 msgstr "Depolama denetleyicileri"
@@ -1215,7 +1215,7 @@ msgstr "Bağlam Menüsü"
 msgid "&Open folder..."
 msgstr "Klas&örü aç..."
 
-msgid "Open &printer tray..."
+msgid "Open p&rinter tray..."
 msgstr "Yazıcı te&psisini aç..."
 
 msgid "Set &icon..."
@@ -2829,14 +2829,11 @@ msgstr "Hub Modu"
 msgid "Hostname:"
 msgstr "Ana bilgisayar adı"
 
-msgid "ISA RTC"
-msgstr "ISA RTC"
+msgid "ISA RAM:"
+msgstr "ISA RAM:"
 
-msgid "ISA RAM"
-msgstr "ISA RAM"
-
-msgid "ISA ROM"
-msgstr "ISA ROM"
+msgid "ISA ROM:"
+msgstr "ISA ROM:"
 
 msgid "&Wipe NVRAM"
 msgstr "NVRAM'i te&mizle"
