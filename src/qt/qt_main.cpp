@@ -56,6 +56,7 @@ extern "C" {
 #include <86box/gdbstub.h>
 #include <86box/version.h>
 #include <86box/renderdefs.h>
+#include "../unix/unix_gpio.h"
 #ifdef Q_OS_LINUX
 #define GAMEMODE_AUTO
 #include "../unix/gamemode/gamemode_client.h"
@@ -653,6 +654,9 @@ main(int argc, char *argv[])
     }
 
     pc_init_modules();
+    
+    /* Initialize GPIO support for hardware LEDs */
+    unix_gpio_init();
 
     // UUID / copy / move detection
     if(!util::compareUuid()) {
@@ -881,6 +885,10 @@ main(int argc, char *argv[])
     const auto ret       = app.exec();
     cpu_thread_run = 0;
     main_thread->join();
+    
+    /* Cleanup GPIO support */
+    unix_gpio_close();
+    
     pc_close(nullptr);
     endblit();
 

@@ -28,6 +28,8 @@
 #    include "macOSXGlue.h"
 #endif
 
+#include "unix_gpio.h"
+
 #include <86box/86box.h>
 #include <86box/mem.h>
 #include <86box/rom.h>
@@ -477,15 +479,27 @@ ui_sb_update_icon_state(UNUSED(int tag), UNUSED(int state))
 }
 
 void
-ui_sb_update_icon(UNUSED(int tag), UNUSED(int active))
+ui_sb_update_icon(UNUSED(int tag), int active)
 {
-    /* No-op. */
+    /* Check if this is HDD activity */
+    const unsigned int temp = (unsigned int) tag;
+    const int category = (int) (temp & 0xfffffff0);
+    
+    if (category == SB_HDD) {
+        unix_gpio_hdd_activity(active);
+    }
 }
 
 void
-ui_sb_update_icon_write(UNUSED(int tag), UNUSED(int active))
+ui_sb_update_icon_write(UNUSED(int tag), int active)
 {
-    /* No-op. */
+    /* Check if this is HDD write activity */
+    const unsigned int temp = (unsigned int) tag;
+    const int category = (int) (temp & 0xfffffff0);
+    
+    if (category == SB_HDD) {
+        unix_gpio_hdd_write(active);
+    }
 }
 
 void
@@ -643,6 +657,9 @@ do_stop(void)
 
     is_quit = 1;
     sdl_close();
+
+    /* Cleanup GPIO support */
+    unix_gpio_close();
 
     pc_close(thMain);
 
@@ -1244,6 +1261,9 @@ main(int argc, char **argv)
         return 6;
     }
     pc_init_modules();
+    
+    /* Initialize GPIO support for hardware LEDs */
+    unix_gpio_init();
 
     for (uint8_t i = 1; i < GFXCARD_MAX; i++)
         gfxcard[i]  = 0;

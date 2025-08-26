@@ -22,6 +22,7 @@ add_library(plat OBJECT
     unix.c
     unix_serial_passthrough.c
     unix_netsocket.c
+    unix_gpio.c
 )
 
 if (NOT CPPTHREADS)

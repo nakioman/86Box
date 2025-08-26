@@ -42,6 +42,7 @@ extern "C" {
 #include <86box/mouse.h>
 #include <86box/timer.h>
 #include <86box/86box.h>
+#include "../unix/unix_gpio.h"
 #include <86box/device.h>
 #include <86box/fdd.h>
 #include <86box/hdc.h>
@@ -358,6 +359,7 @@ ui_sb_update_icon(int tag, int active)
             break;
         case SB_HDD:
             machine_status.hdd[item].active = active > 0 ? true : false;
+            unix_gpio_hdd_activity(active);
             break;
         case SB_NETWORK:
             machine_status.net[item].active = active > 0 ? true : false;
@@ -394,6 +396,7 @@ ui_sb_update_icon_write(int tag, int write)
             break;
         case SB_HDD:
             machine_status.hdd[item].write_active = write > 0 ? true : false;
+            unix_gpio_hdd_write(write);
             break;
         case SB_NETWORK:
             machine_status.net[item].write_active = write > 0 ? true : false;
