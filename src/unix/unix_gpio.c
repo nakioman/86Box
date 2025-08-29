@@ -23,6 +23,9 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <signal.h>
+#include <sys/time.h>
+#include <time.h>
 #include <86box/86box.h>
 #include <86box/config.h>
 #include <86box/ini.h>
@@ -36,12 +39,23 @@
 /* GPIO configuration */
 static int gpio_hdd_activity_pin = -1;
 static int gpio_hdd_write_pin = -1;
+static int gpio_hdd_buzzer_pin = -1;
 static int gpio_enabled = 0;
-static int gpio_exported[2] = {0, 0}; /* Track exported GPIOs */
+static int gpio_buzzer_enabled = 0;
+static int gpio_buzzer_volume = 2; /* 1=quietest, 5=loudest */
+static int gpio_exported[3] = {0, 0, 0}; /* Track exported GPIOs */
 
 /* GPIO file handles for performance */
 static int gpio_hdd_activity_fd = -1;
 static int gpio_hdd_write_fd = -1;
+static int gpio_hdd_buzzer_fd = -1;
+
+/* Forward declarations */
+static int gpio_export(int pin);
+static int gpio_set_direction(int pin, const char *direction);
+static int gpio_open_value_fd(int pin);
+static void gpio_set_value_fd(int fd, int value);
+static void gpio_unexport(int pin);
 
 static void
 gpio_list_exported_pins(void)
@@ -50,6 +64,21 @@ gpio_list_exported_pins(void)
     pclog("GPIO: Checking currently exported pins:\n");
     snprintf(cmd, sizeof(cmd), "ls -la %s/gpio* 2>/dev/null || echo 'No GPIO pins currently exported'", GPIO_SYSFS_BASE);
     system(cmd);
+}
+
+/* Buzzer control functions */
+static void
+gpio_buzzer_click_internal(int duration_us)
+{
+    if (!gpio_buzzer_enabled || gpio_hdd_buzzer_fd < 0)
+        return;
+    
+    /* Volume control: 1=50us (quietest), 2=100us, 3=200us, 4=400us, 5=800us (loudest) */
+    int volume_duration = 25 * (1 << gpio_buzzer_volume); /* Exponential scale */
+    
+    gpio_set_value_fd(gpio_hdd_buzzer_fd, 1);
+    usleep(volume_duration);
+    gpio_set_value_fd(gpio_hdd_buzzer_fd, 0);
 }
 
 static int
@@ -209,8 +238,21 @@ unix_gpio_init(void)
     
     gpio_hdd_activity_pin = config_get_int("Unix", "gpio_hdd_activity_pin", -1);
     gpio_hdd_write_pin = config_get_int("Unix", "gpio_hdd_write_pin", -1);
+    gpio_hdd_buzzer_pin = config_get_int("Unix", "gpio_hdd_buzzer_pin", -1);
+    gpio_buzzer_enabled = config_get_int("Unix", "gpio_buzzer_enabled", 0);
+    gpio_buzzer_volume = config_get_int("Unix", "gpio_buzzer_volume", 2);
     
-    if (gpio_hdd_activity_pin < 0 && gpio_hdd_write_pin < 0) {
+    /* Clamp volume to valid range 1-5 */
+    if (gpio_buzzer_volume < 1) gpio_buzzer_volume = 1;
+    if (gpio_buzzer_volume > 5) gpio_buzzer_volume = 5;
+    
+    pclog("GPIO: gpio_hdd_activity_pin = %d\n", gpio_hdd_activity_pin);
+    pclog("GPIO: gpio_hdd_write_pin = %d\n", gpio_hdd_write_pin);
+    pclog("GPIO: gpio_hdd_buzzer_pin = %d\n", gpio_hdd_buzzer_pin);
+    pclog("GPIO: gpio_buzzer_enabled = %d\n", gpio_buzzer_enabled);
+    pclog("GPIO: gpio_buzzer_volume = %d (1=quietest, 5=loudest)\n", gpio_buzzer_volume);
+    
+    if (gpio_hdd_activity_pin < 0 && gpio_hdd_write_pin < 0 && gpio_hdd_buzzer_pin < 0) {
         pclog("GPIO: No GPIO pins configured\n");
         return 0;
     }
@@ -249,6 +291,22 @@ unix_gpio_init(void)
         }
     }
     
+    /* Initialize HDD buzzer pin */
+    if (gpio_hdd_buzzer_pin >= 0 && gpio_buzzer_enabled) {
+        pclog("GPIO: Configuring HDD buzzer pin %d\n", gpio_hdd_buzzer_pin);
+        if (gpio_export(gpio_hdd_buzzer_pin) &&
+            gpio_set_direction(gpio_hdd_buzzer_pin, "out")) {
+            gpio_hdd_buzzer_fd = gpio_open_value_fd(gpio_hdd_buzzer_pin);
+            if (gpio_hdd_buzzer_fd >= 0) {
+                gpio_exported[2] = 1;
+                gpio_set_value_fd(gpio_hdd_buzzer_fd, 0); /* Start with buzzer off */
+                pclog("GPIO: HDD buzzer pin %d configured successfully\n", gpio_hdd_buzzer_pin);
+            } else {
+                pclog("GPIO: Failed to open value file for HDD buzzer pin %d\n", gpio_hdd_buzzer_pin);
+            }
+        }
+    }
+    
     pclog("GPIO: GPIO initialization complete\n");
     return 1;
 }
@@ -261,7 +319,7 @@ unix_gpio_close(void)
     
     pclog("GPIO: Shutting down GPIO support\n");
     
-    /* Turn off LEDs */
+    /* Turn off LEDs and buzzer */
     if (gpio_hdd_activity_fd >= 0) {
         gpio_set_value_fd(gpio_hdd_activity_fd, 0);
         close(gpio_hdd_activity_fd);
@@ -272,6 +330,12 @@ unix_gpio_close(void)
         gpio_set_value_fd(gpio_hdd_write_fd, 0);
         close(gpio_hdd_write_fd);
         gpio_hdd_write_fd = -1;
+    }
+    
+    if (gpio_hdd_buzzer_fd >= 0) {
+        gpio_set_value_fd(gpio_hdd_buzzer_fd, 0);
+        close(gpio_hdd_buzzer_fd);
+        gpio_hdd_buzzer_fd = -1;
     }
     
     /* Unexport GPIOs */
@@ -285,25 +349,75 @@ unix_gpio_close(void)
         gpio_exported[1] = 0;
     }
     
+    if (gpio_exported[2] && gpio_hdd_buzzer_pin >= 0) {
+        gpio_unexport(gpio_hdd_buzzer_pin);
+        gpio_exported[2] = 0;
+    }
+    
     gpio_enabled = 0;
 }
 
 void
 unix_gpio_hdd_activity(int active)
 {
-    if (!gpio_enabled || gpio_hdd_activity_fd < 0)
+    pclog("GPIO: unix_gpio_hdd_activity called with active=%d\n", active);
+    if (!gpio_enabled) {
+        pclog("GPIO: GPIO not enabled, skipping hdd_activity\n");
         return;
-    
+    }
+    if (gpio_hdd_activity_fd < 0) {
+        pclog("GPIO: Invalid fd for hdd_activity\n");
+        return;
+    }
     gpio_set_value_fd(gpio_hdd_activity_fd, active);
 }
 
 void
 unix_gpio_hdd_write(int active)
 {
-    if (!gpio_enabled || gpio_hdd_write_fd < 0)
+    pclog("GPIO: unix_gpio_hdd_write called with active=%d\n", active);
+    if (!gpio_enabled) {
+        pclog("GPIO: GPIO not enabled, skipping hdd_write\n");
         return;
-    
+    }
+    if (gpio_hdd_write_fd < 0) {
+        pclog("GPIO: Invalid fd for hdd_write\n");
+        return;
+    }
     gpio_set_value_fd(gpio_hdd_write_fd, active);
+}
+
+void
+unix_gpio_hdd_click(void)
+{
+    pclog("GPIO: unix_gpio_hdd_click called\n");
+    if (!gpio_enabled || !gpio_buzzer_enabled) {
+        pclog("GPIO: GPIO or buzzer not enabled, skipping click\n");
+        return;
+    }
+    
+    /* Generate a quiet click - 0.1ms pulse for lower volume */
+    gpio_buzzer_click_internal(100); /* 0.1ms = 100us - much quieter */
+}
+
+void
+unix_gpio_hdd_seek(void)
+{
+    pclog("GPIO: unix_gpio_hdd_seek called\n");
+    if (!gpio_enabled || !gpio_buzzer_enabled) {
+        pclog("GPIO: GPIO or buzzer not enabled, skipping seek\n");
+        return;
+    }
+    
+    /* Generate multiple clicks to simulate head seeking */
+    /* Pattern: quick burst of 2-4 clicks */
+    int clicks = 2 + (rand() % 3); /* 2-4 clicks */
+    for (int i = 0; i < clicks; i++) {
+        gpio_buzzer_click_internal(800); /* Slightly shorter clicks for seeks */
+        if (i < clicks - 1) {
+            usleep(2000); /* 2ms between clicks */
+        }
+    }
 }
 
 #else
@@ -326,6 +440,16 @@ unix_gpio_hdd_activity(int active)
 
 void
 unix_gpio_hdd_write(int active)
+{
+}
+
+void
+unix_gpio_hdd_click(void)
+{
+}
+
+void
+unix_gpio_hdd_seek(void)
 {
 }
 #endif

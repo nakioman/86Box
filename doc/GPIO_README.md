@@ -10,7 +10,9 @@ The GPIO support feature enables 86Box to control GPIO pins on a Raspberry Pi (o
 
 - **HDD Activity LED**: Lights up when any hard disk read or write operation occurs
 - **HDD Write LED**: Lights up specifically when write operations occur
-- **Configurable GPIO pins**: Choose which GPIO pins to use for each LED
+- **HDD Buzzer Clicks**: Produces realistic HDD clicking sounds ONLY on track changes (head seeks)
+- **Authentic Behavior**: Buzzer silent during reads/writes within same track, just like real HDDs
+- **Configurable GPIO pins**: Choose which GPIO pins to use for each LED and buzzer
 - **Safe GPIO handling**: Properly exports, configures, and cleans up GPIO pins
 - **Performance optimized**: Uses file descriptors for fast GPIO updates
 
@@ -20,6 +22,7 @@ The GPIO support feature enables 86Box to control GPIO pins on a Raspberry Pi (o
 - Raspberry Pi is the most common platform, but any Linux system with GPIO should work
 - Appropriate permissions to access GPIO (usually requires running as root or being in the `gpio` group)
 - LEDs and appropriate resistors connected to the chosen GPIO pins
+- Optional: Active buzzer for HDD clicking sounds (recommended: 5V active buzzer with built-in oscillator)
 
 ## Hardware Setup
 
@@ -30,8 +33,9 @@ For each LED you want to control:
 1. Connect the long leg (anode) of the LED to the chosen GPIO pin
 2. Connect a 220-330 ohm resistor between the short leg (cathode) of the LED and ground (GND)
 3. Common GPIO pins on Raspberry Pi:
-   - GPIO 18 (Physical pin 12) - commonly used for HDD activity
-   - GPIO 24 (Physical pin 18) - commonly used for HDD write activity
+   - GPIO 18 (Physical pin 12) - commonly used for HDD activity LED
+   - GPIO 19 (Physical pin 35) - commonly used for HDD write LED
+   - GPIO 20 (Physical pin 38) - commonly used for HDD buzzer
    - Ground pins: Physical pins 6, 9, 14, 20, 25, 30, 34, 39
 
 ### Wiring Example
@@ -50,12 +54,61 @@ Raspberry Pi GPIO Header:
 │ GND │GP15 │ Pins 9-10
 ├─────┼─────┤
 │GP17 │GP18 │ Pins 11-12 ← Connect HDD Activity LED anode to Pin 12
+├─────┼─────┤
+│GP27 │GND  │ Pins 13-14
+├─────┼─────┤
+│GP22 │GP23 │ Pins 15-16
+├─────┼─────┤
+│3V3  │GP24 │ Pins 17-18
+├─────┼─────┤
+│GP10 │GND  │ Pins 19-20 ← Connect buzzer ground
+├─────┼─────┤
+│GP9  │GP25 │ Pins 21-22
+├─────┼─────┤
+│GP11 │GP8  │ Pins 23-24
+├─────┼─────┤
+│GND  │GP7  │ Pins 25-26
+├─────┼─────┤
+│ID_SD│ID_SC│ Pins 27-28
+├─────┼─────┤
+│GP5  │GND  │ Pins 29-30
+├─────┼─────┤
+│GP6  │GP12 │ Pins 31-32
+├─────┼─────┤
+│GP13 │GND  │ Pins 33-34
+├─────┼─────┤
+│GP19 │GP16 │ Pins 35-36 ← Pin 35 = HDD Write LED
+├─────┼─────┤
+│GP26 │GP20 │ Pins 37-38 ← Pin 38 = HDD Buzzer
+├─────┼─────┤
+│GND  │GP21 │ Pins 39-40 ← Connect buzzer ground here too
 └─────┴─────┘
 
 LED Connection:
 GPIO 18 (Pin 12) ──── LED Anode (long leg)
                      LED Cathode (short leg) ──── 330Ω Resistor ──── GND (Pin 6)
+
+Buzzer Connection:
+GPIO 20 (Pin 38) ──── Buzzer Positive (+)
+                     Buzzer Negative (-) ──── GND (Pin 39)
 ```
+
+### Hardware Requirements
+
+**For LEDs:**
+- Standard 5mm LEDs (any color)
+- 330Ω current-limiting resistors
+- Breadboard or PCB for connections
+
+**For Buzzer:**
+- 5V Active Buzzer (recommended) - has built-in oscillator, produces tone when powered
+- OR 3.3V Active Buzzer - works directly with Pi GPIO voltage
+- Do NOT use passive buzzers - they require PWM signal generation
+
+**Recommended Active Buzzers:**
+- 5V Active Buzzer: More reliable, louder sound
+- 3.3V Active Buzzer: Direct GPIO compatibility
+- Look for "Active Buzzer" or "Buzzer with Oscillator" in specifications
 
 ## Software Configuration
 
@@ -73,7 +126,14 @@ gpio_hdd_activity_pin = 18
 
 # GPIO pin for HDD write LED (write operations only)
 # Use -1 to disable this LED
-gpio_hdd_write_pin = 24
+gpio_hdd_write_pin = 19
+
+# GPIO pin for HDD buzzer (clicking sounds)
+# Use -1 to disable buzzer
+gpio_hdd_buzzer_pin = 20
+
+# Enable/disable buzzer sounds (0 = disabled, 1 = enabled)
+gpio_buzzer_enabled = 1
 ```
 
 **For Raspberry Pi 5:**
@@ -88,7 +148,14 @@ gpio_hdd_activity_pin = 589
 
 # GPIO pin for HDD write LED (write operations only)
 # Use -1 to disable this LED
-gpio_hdd_write_pin = 595
+gpio_hdd_write_pin = 590
+
+# GPIO pin for HDD buzzer (clicking sounds)
+# Use -1 to disable buzzer
+gpio_hdd_buzzer_pin = 591
+
+# Enable/disable buzzer sounds (0 = disabled, 1 = enabled)
+gpio_buzzer_enabled = 1
 ```
 
 ### Configuration Options
@@ -98,18 +165,20 @@ gpio_hdd_write_pin = 595
 | `gpio_enabled` | Enable or disable GPIO support | `0` | `0` (disabled), `1` (enabled) |
 | `gpio_hdd_activity_pin` | GPIO pin for HDD activity LED | `-1` | `-1` (disabled) or valid GPIO pin number (see below) |
 | `gpio_hdd_write_pin` | GPIO pin for HDD write LED | `-1` | `-1` (disabled) or valid GPIO pin number (see below) |
+| `gpio_hdd_buzzer_pin` | GPIO pin for HDD buzzer | `-1` | `-1` (disabled) or valid GPIO pin number (see below) |
+| `gpio_buzzer_enabled` | Enable or disable buzzer sounds | `0` | `0` (disabled), `1` (enabled) |
 
 ### GPIO Pin Mapping
 
 **Raspberry Pi 1-4:**
 - Physical pin 12 (GPIO18) = sysfs pin 18
-- Physical pin 18 (GPIO24) = sysfs pin 24
 - Physical pin 35 (GPIO19) = sysfs pin 19
+- Physical pin 38 (GPIO20) = sysfs pin 20
 
 **Raspberry Pi 5:**
 - Physical pin 12 (GPIO18) = sysfs pin 589
-- Physical pin 18 (GPIO24) = sysfs pin 595
 - Physical pin 35 (GPIO19) = sysfs pin 590
+- Physical pin 38 (GPIO20) = sysfs pin 591
 
 To find the correct pin numbers for your system:
 ```bash

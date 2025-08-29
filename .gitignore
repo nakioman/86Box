@@ -65,3 +65,4 @@ CMakeLists.txt.user
 
 # Jetbrains CLion
 .idea
+log.txt

@@ -28,6 +28,9 @@
 #include <86box/ui.h>
 #include <86box/hdd.h>
 #include <86box/cdrom.h>
+#ifdef __unix__
+#include "../unix/unix_gpio.h"
+#endif
 #include <86box/video.h>
 #include "cpu.h"
 
@@ -201,6 +204,13 @@ hdd_seek_get_time(hard_disk_t *hdd, uint32_t dst_addr, uint8_t operation, uint8_
         hdd->cur_addr     = dst_addr;
         hdd->cur_track    = new_track;
         hdd->cur_cylinder = new_cylinder;
+        
+        /* Trigger buzzer click only on actual cylinder changes (head seeks) */
+#ifdef __unix__
+        if (cylinder_diff > 0) {
+            unix_gpio_hdd_click(); /* Single click for realistic seek sound */
+        }
+#endif
     }
 
     return seek_time;

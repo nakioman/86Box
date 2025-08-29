@@ -33,6 +33,9 @@ set(THREADS_PREFER_PTHREAD_FLAG TRUE)
 find_package(Threads REQUIRED)
 target_link_libraries(86Box Threads::Threads)
 
+# Link real-time library for GPIO timer functions
+target_link_libraries(86Box rt)
+
 find_package(SDL2 REQUIRED)
 include_directories(${SDL2_INCLUDE_DIRS})
 if(STATIC_BUILD AND TARGET SDL2::SDL2-static)
