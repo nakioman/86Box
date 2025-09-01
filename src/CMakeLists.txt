@@ -48,6 +48,10 @@ add_executable(86Box
     nvr_at.c
     nvr_ps2.c
     machine_status.c
+    http_api.c
+    include/http_api.h
+    include/mongoose.h
+    mongoose.c
 )
 
 if(CMAKE_SYSTEM_NAME MATCHES "Linux")
