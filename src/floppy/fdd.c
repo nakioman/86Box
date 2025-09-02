@@ -39,6 +39,7 @@
 #include <86box/fdd_mfm.h>
 #include <86box/fdd_td0.h>
 #include <86box/fdc.h>
+#include <86box/fdd_buzzer.h>
 
 /* Flags:
    Bit  0:  300 rpm supported;
@@ -241,6 +242,8 @@ fdd_forced_seek(int drive, int track_diff)
     if (fdd[drive].track > drive_types[fdd[drive].type].max_track)
         fdd[drive].track = drive_types[fdd[drive].type].max_track;
 
+    floppy_buzzer_seek(drive, track_diff);
+
     fdd_do_seek(drive, fdd[drive].track);
 }
 
@@ -259,6 +262,8 @@ fdd_seek(int drive, int track_diff)
         fdd[drive].track = drive_types[fdd[drive].type].max_track;
 
     fdd_changed[drive] = 0;
+
+    floppy_buzzer_seek(drive, track_diff);
 
     fdd_do_seek(drive, fdd[drive].track);
 }
@@ -549,10 +554,13 @@ void
 fdd_set_motor_enable(int drive, int motor_enable)
 {
     /* I think here is where spin-up and spin-down should be implemented. */
-    if (motor_enable && !motoron[drive])
+    if (motor_enable && !motoron[drive]) {
         timer_set_delay_u64(&fdd_poll_time[drive], fdd_byteperiod(drive));
-    else if (!motor_enable)
+        floppy_buzzer_motor_on(drive);
+    } else if (!motor_enable) {
         timer_disable(&fdd_poll_time[drive]);
+        floppy_buzzer_motor_off(drive);
+    }
     motoron[drive] = motor_enable;
 }
 
@@ -569,8 +577,11 @@ fdd_poll(void *priv)
 
     timer_advance_u64(&fdd_poll_time[drive], fdd_byteperiod(drive));
 
-    if (drv->poll)
+    if (drv->poll) {
         drv->poll(drive);
+        /* Signal R/W activity when polling is active */
+        floppy_buzzer_activity(drive);
+    }
 
     if (fdd_notfound) {
         fdd_notfound--;
