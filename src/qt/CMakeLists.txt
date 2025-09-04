@@ -86,6 +86,8 @@ add_library(plat STATIC
     qt.c
     qt_main.cpp
     qt_platform.cpp
+        qt_wrapper.cpp
+        ../include/qt_wrapper.h
 )
 
 add_library(ui STATIC

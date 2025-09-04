@@ -60,6 +60,7 @@ extern "C" {
 #define GAMEMODE_AUTO
 #include "../unix/gamemode/gamemode_client.h"
 #endif
+#include <http_api.h>
 }
 
 #ifdef Q_OS_WINDOWS
@@ -742,6 +743,8 @@ main(int argc, char *argv[])
 #ifdef DISCORD
     discord_load();
 #endif
+
+    http_api_init();
 
     main_window = new MainWindow();
     if (startMaximized) {
