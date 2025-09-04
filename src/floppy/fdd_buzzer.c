@@ -42,7 +42,6 @@
 #include <86box/config.h>
 #include <errno.h>
 
-#define ENABLE_FDD_BUZZER_LOG 1
 #ifdef ENABLE_FDD_BUZZER_LOG
 int fdd_buzzer_do_log = ENABLE_FDD_BUZZER_LOG;
 
