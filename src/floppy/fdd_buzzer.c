@@ -22,7 +22,9 @@
  */
 
 #define HAVE_STDARG_H
+#define _POSIX_C_SOURCE 200809L
 
+#include <86box/fdd_buzzer.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,539 +40,257 @@
 #include <86box/thread.h>
 #include <86box/ini.h>
 #include <86box/config.h>
+#include <errno.h>
 
-#define ENABLE_FLOPPY_BUZZER_LOG 1
-#ifdef ENABLE_FLOPPY_BUZZER_LOG
-int floppy_buzzer_do_log = ENABLE_FLOPPY_BUZZER_LOG;
+#define ENABLE_FDD_BUZZER_LOG 1
+#ifdef ENABLE_FDD_BUZZER_LOG
+int fdd_buzzer_do_log = ENABLE_FDD_BUZZER_LOG;
 
 static void
-floppy_buzzer_log(const char *fmt, ...)
+fdd_buzzer_log(const char *fmt, ...)
 {
     va_list ap;
 
-    if (floppy_buzzer_do_log) {
+    if (fdd_buzzer_do_log) {
         va_start(ap, fmt);
         pclog_ex(fmt, ap);
         va_end(ap);
     }
 }
 #else
-#    define floppy_buzzer_log(fmt, ...)
+#    define fdd_buzzer_log(fmt, ...)
 #endif
 
-/* Default GPIO pin for buzzer (GPIO 18, physical pin 12) */
-#define DEFAULT_BUZZER_PIN 18
-#define DEFAULT_BUZZER_CHIP "/dev/gpiochip0"
+/* Global speaker instance */
+static floppy_speaker_t global_speaker;
 
-/* Sound patterns timing (in microseconds) */
-#define MOTOR_STARTUP_DURATION 2000000    /* 2 seconds */
-#define MOTOR_RUNNING_PERIOD   100000     /* 100ms between pulses */
-#define SEEK_STEP_DURATION     50000      /* 50ms per step */
-#define READ_WRITE_PULSE       5000       /* 5ms pulse for R/W activity */
+/* Timing utilities */
+#define MSEC_TO_NSEC(ms) ((ms) * 1000000L)
+#define USEC_TO_NSEC(us) ((us) * 1000L)
 
-typedef struct {
-    struct gpiod_chip *chip;
-    struct gpiod_line_request *buzzer_request;
-    int                buzzer_pin;
-    char               buzzer_chip[256];   /* GPIO chip path */
-    int                enabled;
-    int                gpio_enabled;       /* From config: gpio_enabled */
-    int                fdd_buzzer_enabled; /* From config: fdd_buzzer_enabled */
-    pthread_t          thread;
-    pthread_mutex_t    mutex;
-    volatile int       should_stop;
-    
-    /* Current state */
-    volatile int motor_running[4];
-    volatile int seeking[4];
-    volatile int activity[4];
-} floppy_buzzer_t;
-
-static floppy_buzzer_t buzzer = { 0 };
-
-/* Load configuration settings */
-static void
-floppy_buzzer_load_config(void)
-{
-    const char *chip_path;
-    
-    /* Load settings from [Unix] section */
-    buzzer.gpio_enabled = config_get_int("Unix", "gpio_enabled", 1);
-    buzzer.fdd_buzzer_enabled = config_get_int("Unix", "fdd_buzzer_enabled", 1);
-    buzzer.buzzer_pin = config_get_int("Unix", "fdd_buzzer_gpio_pin", DEFAULT_BUZZER_PIN);
-    
-    /* Load GPIO chip path */
-    chip_path = config_get_string("Unix", "fdd_buzzer_gpio_chip", DEFAULT_BUZZER_CHIP);
-    strncpy(buzzer.buzzer_chip, chip_path, sizeof(buzzer.buzzer_chip) - 1);
-    buzzer.buzzer_chip[sizeof(buzzer.buzzer_chip) - 1] = '\0';
-    
-    floppy_buzzer_log("Config loaded: gpio_enabled=%d, fdd_buzzer_enabled=%d, gpio_pin=%d, gpio_chip=%s\n",
-                      buzzer.gpio_enabled, buzzer.fdd_buzzer_enabled, buzzer.buzzer_pin, buzzer.buzzer_chip);
+/* Precise delay function */
+static void delay_ns(uint64_t ns) {
+    struct timespec req = {
+        .tv_sec = ns / 1000000000UL,
+        .tv_nsec = ns % 1000000000UL
+    };
+    nanosleep(&req, NULL);
 }
 
-/* Save configuration settings */
-static void
-floppy_buzzer_save_config(void)
-{
-    /* Save settings to [Unix] section */
-    config_set_int("Unix", "gpio_enabled", buzzer.gpio_enabled);
-    config_set_int("Unix", "fdd_buzzer_enabled", buzzer.fdd_buzzer_enabled);
-    config_set_int("Unix", "fdd_buzzer_gpio_pin", buzzer.buzzer_pin);
-    config_set_string("Unix", "fdd_buzzer_gpio_chip", buzzer.buzzer_chip);
+static void delay_us(unsigned int us) {
+    delay_ns(USEC_TO_NSEC(us));
 }
 
-/* Set GPIO pin high */
-static void
-gpio_set_high(int pin)
-{
-    if (!buzzer.buzzer_request)
-        return;
-
-    gpiod_line_request_set_value(buzzer.buzzer_request, buzzer.buzzer_pin, GPIOD_LINE_VALUE_ACTIVE);
-}
-
-/* Set GPIO pin low */
-static void
-gpio_set_low(int pin)
-{
-    if (!buzzer.buzzer_request)
-        return;
-
-    gpiod_line_request_set_value(buzzer.buzzer_request, buzzer.buzzer_pin, GPIOD_LINE_VALUE_INACTIVE);
-}
-
-/* Generate a tone for specified duration and frequency */
-static void
-generate_tone(int frequency_hz, int duration_us)
-{
-    if (!buzzer.enabled || frequency_hz <= 0)
-        return;
-
-    int period_us = 1000000 / frequency_hz;
-    int half_period_us = period_us / 2;
-    int cycles = duration_us / period_us;
-
-    for (int i = 0; i < cycles && !buzzer.should_stop; i++) {
-        gpio_set_high(buzzer.buzzer_pin);
-        usleep(half_period_us);
-        gpio_set_low(buzzer.buzzer_pin);
-        usleep(half_period_us);
-    }
-}
-
-/* Generate motor startup sound */
-static void
-motor_startup_sound(void)
-{
-    floppy_buzzer_log("Playing motor startup sound\n");
-    
-    /* Ramp up from low to high frequency to simulate motor spin-up */
-    for (int freq = 20; freq <= 200 && !buzzer.should_stop; freq += 5) {
-        generate_tone(freq, 10000);
+/* Set GPIO pin state */
+static int set_speaker_pin(bool state) {
+    if (!global_speaker.initialized || !global_speaker.request) {
+        return -1;
     }
     
-    /* Brief high frequency burst */
-    generate_tone(800, 100000);
+    const enum gpiod_line_value values[1] = { state ? GPIOD_LINE_VALUE_ACTIVE : GPIOD_LINE_VALUE_INACTIVE };
+    int ret = gpiod_line_request_set_values(global_speaker.request, values);
+    return (ret < 0) ? ret : 0;
 }
 
-/* Generate motor running sound */
-static void
-motor_running_sound(void)
-{
-    /* Low frequency hum with occasional variations */
-    generate_tone(120, 80000);
-    generate_tone(100, 20000);
-}
+/* Initialize speaker system */
+int fdd_buzzer_init(void) {
+    memset(&global_speaker, 0, sizeof(global_speaker));
 
-/* Generate seek step sound */
-static void
-seek_step_sound(void)
-{
-    floppy_buzzer_log("Playing seek step sound\n");
-    
-    /* Sharp click sound */
-    generate_tone(2000, 3000);
-    usleep(10000);
-    generate_tone(1500, 2000);
-}
-
-/* Generate read/write activity sound */
-static void
-activity_sound(void)
-{
-    /* Quick high-frequency chirp */
-    generate_tone(3000, 2000);
-    usleep(1000);
-    generate_tone(3500, 1500);
-}
-
-/* Main buzzer thread */
-static void *
-buzzer_thread(void *arg)
-{
-    (void)arg;
-    
-    floppy_buzzer_log("Floppy buzzer thread started\n");
-    
-    while (!buzzer.should_stop) {
-        pthread_mutex_lock(&buzzer.mutex);
-        
-        /* Check for motor activity */
-        int any_motor_running = 0;
-        for (int drive = 0; drive < 4; drive++) {
-            if (buzzer.motor_running[drive]) {
-                any_motor_running = 1;
-                break;
-            }
+    /* Set default or user configuration */
+        if (config_get_int("Unix", "gpio_enabled", 0) == 0) {
+            fdd_buzzer_log("GPIO disabled in configuration, speaker not initialized\n");
+            return -1;
         }
-        
-        /* Check for seeking activity */
-        int any_seeking = 0;
-        for (int drive = 0; drive < 4; drive++) {
-            if (buzzer.seeking[drive]) {
-                any_seeking = 1;
-                buzzer.seeking[drive] = 0;  /* Reset after processing */
-                break;
-            }
-        }
-        
-        /* Check for read/write activity */
-        int any_activity = 0;
-        for (int drive = 0; drive < 4; drive++) {
-            if (buzzer.activity[drive]) {
-                any_activity = 1;
-                buzzer.activity[drive] = 0;  /* Reset after processing */
-                break;
-            }
-        }
-        
-        pthread_mutex_unlock(&buzzer.mutex);
-        
-        /* Generate appropriate sounds */
-        if (any_seeking) {
-            seek_step_sound();
-        } else if (any_activity) {
-            activity_sound();
-        } else if (any_motor_running) {
-            motor_running_sound();
-        } else {
-            /* No activity, just sleep */
-            usleep(50000);  /* 50ms */
-        }
-    }
-    
-    floppy_buzzer_log("Floppy buzzer thread stopped\n");
-    return NULL;
-}
 
-/* Initialize the GPIO floppy buzzer */
-int
-floppy_buzzer_init(void)
-{
-    struct gpiod_line_settings *line_settings;
-    struct gpiod_request_config *request_config;
-    struct gpiod_line_config *line_config;
-    unsigned int offsets[1];
-    
-    /* Load configuration settings first */
-    floppy_buzzer_load_config();
-    
-    /* Check if GPIO is enabled in config */
-    if (!buzzer.gpio_enabled) {
-        floppy_buzzer_log("GPIO disabled in configuration (gpio_enabled=0), buzzer disabled\n");
-        return 0;
-    }
-    
-    /* Check if floppy buzzer is enabled in config */
-    if (!buzzer.fdd_buzzer_enabled) {
-        floppy_buzzer_log("Floppy buzzer disabled in configuration (fdd_buzzer_enabled=0), buzzer disabled\n");
-        return 0;
-    }
-    
-    /* Validate GPIO pin range */
-    if (buzzer.buzzer_pin < 0 || buzzer.buzzer_pin > 53) {
-        floppy_buzzer_log("Invalid GPIO pin %d in configuration, using default pin %d\n",
-                          buzzer.buzzer_pin, DEFAULT_BUZZER_PIN);
-        buzzer.buzzer_pin = DEFAULT_BUZZER_PIN;
-        floppy_buzzer_save_config();
-    }
-    
-    /* Validate GPIO chip path */
-    if (strlen(buzzer.buzzer_chip) == 0) {
-        floppy_buzzer_log("Empty GPIO chip path in configuration, using default %s\n", DEFAULT_BUZZER_CHIP);
-        strncpy(buzzer.buzzer_chip, DEFAULT_BUZZER_CHIP, sizeof(buzzer.buzzer_chip) - 1);
-        buzzer.buzzer_chip[sizeof(buzzer.buzzer_chip) - 1] = '\0';
-        floppy_buzzer_save_config();
-    }
-    
+        if (config_get_int("Unix", "fdd_buzzer_enabled", 0) == 0) {
+            fdd_buzzer_log("Floppy buzzer disabled in configuration, speaker not initialized\n");
+            return -1;
+        }
+
+        global_speaker.config.step_volume = config_get_int("Unix", "fdd_buzzer_volume", DEFAULT_STEP_VOLUME);
+        global_speaker.config.speaker_pin = config_get_int("Unix", "fdd_buzzer_gpio_pin", DEFAULT_SPEAKER_PIN);
+
+
     /* Open GPIO chip */
-    buzzer.chip = gpiod_chip_open(buzzer.buzzer_chip);
-    if (!buzzer.chip) {
-        floppy_buzzer_log("Failed to open GPIO chip %s, buzzer disabled\n", buzzer.buzzer_chip);
-        return 0;
+    global_speaker.chip = gpiod_chip_open(config_get_string("Unix", "fdd_buzzer_gpio_chip", DEFAULT_GPIO_CHIP));
+    if (!global_speaker.chip) {
+        fdd_buzzer_log("Failed to open GPIO chip: %s\n", strerror(errno));
+        return -1;
     }
-    
-    floppy_buzzer_log("Successfully opened GPIO chip: %s\n", buzzer.buzzer_chip);
-    
-    /* Set up offsets array */
-    offsets[0] = buzzer.buzzer_pin;
-    
-    /* Create line settings */
-    line_settings = gpiod_line_settings_new();
-    if (!line_settings) {
-        floppy_buzzer_log("Failed to create line settings, buzzer disabled\n");
-        gpiod_chip_close(buzzer.chip);
-        buzzer.chip = NULL;
-        return 0;
+
+    /* Create line request builder */
+    struct gpiod_line_settings *settings = gpiod_line_settings_new();
+    if (!settings) {
+        fdd_buzzer_log("Failed to create line settings: %s\n", strerror(errno));
+        gpiod_chip_close(global_speaker.chip);
+        return -1;
     }
-    
-    /* Configure line as output with initial value low */
-    gpiod_line_settings_set_direction(line_settings, GPIOD_LINE_DIRECTION_OUTPUT);
-    gpiod_line_settings_set_output_value(line_settings, GPIOD_LINE_VALUE_INACTIVE);
-    
+
+    /* Set as output */
+    gpiod_line_settings_set_direction(settings, GPIOD_LINE_DIRECTION_OUTPUT);
+
     /* Create line configuration */
-    line_config = gpiod_line_config_new();
-    if (!line_config) {
-        floppy_buzzer_log("Failed to create line config, buzzer disabled\n");
-        gpiod_line_settings_free(line_settings);
-        gpiod_chip_close(buzzer.chip);
-        buzzer.chip = NULL;
-        return 0;
+    struct gpiod_line_config *line_cfg = gpiod_line_config_new();
+    if (!line_cfg) {
+        fdd_buzzer_log("Failed to create line config: %s\n", strerror(errno));
+        gpiod_line_settings_free(settings);
+        gpiod_chip_close(global_speaker.chip);
+        return -1;
     }
-    
-    /* Add line settings to config */
-    if (gpiod_line_config_add_line_settings(line_config, offsets, 1, line_settings) < 0) {
-        floppy_buzzer_log("Failed to add line settings, buzzer disabled\n");
-        gpiod_line_config_free(line_config);
-        gpiod_line_settings_free(line_settings);
-        gpiod_chip_close(buzzer.chip);
-        buzzer.chip = NULL;
-        return 0;
+
+    /* Add line configuration */
+    if (gpiod_line_config_add_line_settings(line_cfg, &global_speaker.config.speaker_pin, 1, settings) < 0) {
+        fdd_buzzer_log("Failed to add line settings: %s\n", strerror(errno));
+        gpiod_line_config_free(line_cfg);
+        gpiod_line_settings_free(settings);
+        gpiod_chip_close(global_speaker.chip);
+        return -1;
     }
-    
-    /* Create request configuration */
-    request_config = gpiod_request_config_new();
-    if (!request_config) {
-        floppy_buzzer_log("Failed to create request config, buzzer disabled\n");
-        gpiod_line_config_free(line_config);
-        gpiod_line_settings_free(line_settings);
-        gpiod_chip_close(buzzer.chip);
-        buzzer.chip = NULL;
-        return 0;
+
+    /* Request lines */
+    struct gpiod_request_config *req_cfg = gpiod_request_config_new();
+    if (req_cfg) {
+        gpiod_request_config_set_consumer(req_cfg, "86Box Floppy Buzzer");
     }
-    
-    gpiod_request_config_set_consumer(request_config, "86box-floppy-buzzer");
-    
-    /* Request the GPIO line */
-    buzzer.buzzer_request = gpiod_chip_request_lines(buzzer.chip, request_config, line_config);
-    
-    /* Clean up configuration objects */
-    gpiod_request_config_free(request_config);
-    gpiod_line_config_free(line_config);
-    gpiod_line_settings_free(line_settings);
-    
-    if (!buzzer.buzzer_request) {
-        floppy_buzzer_log("Failed to request GPIO line %d, buzzer disabled\n", buzzer.buzzer_pin);
-        gpiod_chip_close(buzzer.chip);
-        buzzer.chip = NULL;
-        return 0;
+
+    global_speaker.request = gpiod_chip_request_lines(global_speaker.chip, req_cfg, line_cfg);
+
+    if (req_cfg) {
+        gpiod_request_config_free(req_cfg);
     }
-    
-    /* Initialize buzzer settings */
-    buzzer.enabled = 1;
-    buzzer.should_stop = 0;
-    
-    /* Initialize mutex */
-    if (pthread_mutex_init(&buzzer.mutex, NULL) != 0) {
-        floppy_buzzer_log("Failed to initialize mutex, buzzer disabled\n");
-        gpiod_line_request_release(buzzer.buzzer_request);
-        gpiod_chip_close(buzzer.chip);
-        buzzer.buzzer_request = NULL;
-        buzzer.chip = NULL;
-        return 0;
+    gpiod_line_config_free(line_cfg);
+    gpiod_line_settings_free(settings);
+
+    if (!global_speaker.request) {
+        fdd_buzzer_log("Failed to request GPIO lines: %s\n", strerror(errno));
+        gpiod_chip_close(global_speaker.chip);
+        return -1;
     }
-    
-    /* Create buzzer thread */
-    if (pthread_create(&buzzer.thread, NULL, buzzer_thread, NULL) != 0) {
-        floppy_buzzer_log("Failed to create buzzer thread, buzzer disabled\n");
-        pthread_mutex_destroy(&buzzer.mutex);
-        gpiod_line_request_release(buzzer.buzzer_request);
-        gpiod_chip_close(buzzer.chip);
-        buzzer.buzzer_request = NULL;
-        buzzer.chip = NULL;
-        return 0;
+    if (!global_speaker.request) {
+        fdd_buzzer_log("Failed to request GPIO line as output: %s\n", strerror(errno));
+        gpiod_chip_close(global_speaker.chip);
+        return -1;
     }
-    
-    floppy_buzzer_log("Floppy buzzer initialized on GPIO chip %s, pin %d\n", buzzer.buzzer_chip, buzzer.buzzer_pin);
-    return 1;
+
+    global_speaker.state = SPEAKER_STATE_IDLE;
+    global_speaker.initialized = true;
+    clock_gettime(CLOCK_MONOTONIC, &global_speaker.start_time);
+
+    fdd_buzzer_log("Floppy speaker initialized on GPIO %u\n", global_speaker.config.speaker_pin);
+    return 0;
 }
 
-/* Cleanup the GPIO floppy buzzer */
-void
-floppy_buzzer_close(void)
-{
-    if (!buzzer.enabled)
+/* Cleanup speaker resources */
+void fdd_buzzer_cleanup(void) {
+    if (!global_speaker.initialized) {
         return;
-    
-    floppy_buzzer_log("Closing floppy buzzer\n");
-    
-    /* Stop the thread */
-    buzzer.should_stop = 1;
-    if (buzzer.thread) {
-        pthread_join(buzzer.thread, NULL);
     }
-    
-    /* Clean up GPIO */
-    if (buzzer.buzzer_request) {
-        gpio_set_low(buzzer.buzzer_pin);
-        gpiod_line_request_release(buzzer.buzzer_request);
-        buzzer.buzzer_request = NULL;
+
+    fdd_buzzer_log("Cleaning up floppy speaker\n");
+
+    /* Ensure speaker is off */
+    if (global_speaker.request) {
+        set_speaker_pin(false);
+        gpiod_line_request_release(global_speaker.request);
     }
-    
-    if (buzzer.chip) {
-        gpiod_chip_close(buzzer.chip);
-        buzzer.chip = NULL;
+
+    if (global_speaker.chip) {
+        gpiod_chip_close(global_speaker.chip);
     }
-    
-    /* Clean up mutex */
-    pthread_mutex_destroy(&buzzer.mutex);
-    
-    buzzer.enabled = 0;
+
+    global_speaker.initialized = false;
+    global_speaker.state = SPEAKER_STATE_IDLE;
+    memset(&global_speaker, 0, sizeof(global_speaker));
+    fdd_buzzer_log("Floppy speaker cleaned up\n");
 }
 
-/* Signal motor start */
-void
-floppy_buzzer_motor_on(int drive)
-{
-    if (!buzzer.enabled || !buzzer.fdd_buzzer_enabled || drive < 0 || drive >= 4)
+/* Generate step pulse */
+void fdd_buzzer_step_pulse(void) {
+    if (!global_speaker.initialized || global_speaker.config.step_volume == 0) {
         return;
+    }
+
+    fdd_buzzer_log("Floppy speaker step pulse INIT\n");
+
+    if (global_speaker.state != SPEAKER_STATE_IDLE) {
+        return; /* Already active */
+    }
+
+    unsigned int volume = global_speaker.config.step_volume;
     
-    pthread_mutex_lock(&buzzer.mutex);
+    global_speaker.state = SPEAKER_STATE_ACTIVE;
+    clock_gettime(CLOCK_MONOTONIC, &global_speaker.start_time);
     
-    if (!buzzer.motor_running[drive]) {
-        floppy_buzzer_log("Motor ON for drive %d\n", drive);
-        buzzer.motor_running[drive] = 1;
-        
-        /* Play startup sound immediately */
-        motor_startup_sound();
+    /* Initial mechanical impact */
+    set_speaker_pin(true);
+    delay_us(80);  /* Sharp initial pulse */
+    set_speaker_pin(false);
+    delay_us(40);
+    
+    /* Primary resonance */
+    for (int i = 0; i < 3; i++) {
+        set_speaker_pin(true);
+        delay_us(50 - (i * 10));  /* Decreasing pulse width */
+        set_speaker_pin(false);
+        delay_us(50 + (i * 10));  /* Increasing gap */
     }
     
-    pthread_mutex_unlock(&buzzer.mutex);
+    /* Secondary resonance (damped) */
+    for (int i = 0; i < 2; i++) {
+        set_speaker_pin(true);
+        delay_us(20);  /* Short pulses */
+        set_speaker_pin(false);
+        delay_us(70 + (i * 20));  /* Longer gaps */
+    }
+    
+    /* Scale timing based on volume */
+    delay_us(1000 * (11 - volume));
+    
+    /* Minimum step cycle time (3ms standard) */
+    delay_us(2000);
+    
+    global_speaker.state = SPEAKER_STATE_IDLE;
+    fdd_buzzer_log("Floppy speaker step pulse DONE\n");
 }
 
-/* Signal motor stop */
-void
-floppy_buzzer_motor_off(int drive)
-{
-    if (!buzzer.enabled || !buzzer.fdd_buzzer_enabled || drive < 0 || drive >= 4)
+/* Generate seek sound (multiple steps) */
+void fdd_buzzer_seek(unsigned int steps) {
+    if (!global_speaker.initialized || global_speaker.config.step_volume == 0 || steps == 0) {
         return;
-    
-    pthread_mutex_lock(&buzzer.mutex);
-    
-    if (buzzer.motor_running[drive]) {
-        floppy_buzzer_log("Motor OFF for drive %d\n", drive);
-        buzzer.motor_running[drive] = 0;
     }
-    
-    pthread_mutex_unlock(&buzzer.mutex);
-}
 
-/* Signal seek operation */
-void
-floppy_buzzer_seek(int drive, int steps)
-{
-    if (!buzzer.enabled || !buzzer.fdd_buzzer_enabled || drive < 0 || drive >= 4 || steps == 0)
-        return;
-    
-    pthread_mutex_lock(&buzzer.mutex);
-    
-    floppy_buzzer_log("Seek operation for drive %d, steps: %d\n", drive, steps);
-    buzzer.seeking[drive] = abs(steps);  /* Store number of steps */
-    
-    pthread_mutex_unlock(&buzzer.mutex);
-}
+    fdd_buzzer_log("Floppy speaker seek %u steps\n", steps);
 
-/* Signal read/write activity */
-void
-floppy_buzzer_activity(int drive)
-{
-    if (!buzzer.enabled || !buzzer.fdd_buzzer_enabled || drive < 0 || drive >= 4)
-        return;
-    
-    pthread_mutex_lock(&buzzer.mutex);
-    buzzer.activity[drive] = 1;
-    pthread_mutex_unlock(&buzzer.mutex);
-}
+    global_speaker.state = SPEAKER_STATE_ACTIVE;
+    unsigned int volume = global_speaker.config.step_volume;
 
-/* Set buzzer GPIO pin (for configuration) */
-void
-floppy_buzzer_set_pin(int pin)
-{
-    if (pin >= 0 && pin <= 53) {
-        buzzer.buzzer_pin = pin;
-        floppy_buzzer_log("Buzzer pin set to GPIO %d\n", pin);
-        floppy_buzzer_save_config();
+    /* Use faster timing for multi-track seeks */
+    unsigned int step_delay_us = (steps > 1) ? 2000 : 3000;  /* Faster for multi-track */
+
+    for (unsigned int i = 0; i < steps; i++) {
+        /* Initial mechanical impact */
+        set_speaker_pin(true);
+        delay_us(60);  /* Shorter impact for seeks */
+        set_speaker_pin(false);
+        delay_us(30);
+
+        /* Quick resonance (shorter for seeks) */
+        for (int j = 0; j < 2; j++) {
+            set_speaker_pin(true);
+            delay_us(40 - (j * 10));
+            set_speaker_pin(false);
+            delay_us(40 + (j * 10));
+        }
+
+        /* Quick damping pulse */
+        set_speaker_pin(true);
+        delay_us(20);
+        set_speaker_pin(false);
+
+        /* Scale timing based on volume and wait for next step */
+        delay_us(step_delay_us * (10 - (volume - 1)) / 10);
     }
-}
 
-/* Set buzzer GPIO chip (for configuration) */
-void
-floppy_buzzer_set_chip(const char *chip_path)
-{
-    if (chip_path && strlen(chip_path) > 0 && strlen(chip_path) < sizeof(buzzer.buzzer_chip)) {
-        strncpy(buzzer.buzzer_chip, chip_path, sizeof(buzzer.buzzer_chip) - 1);
-        buzzer.buzzer_chip[sizeof(buzzer.buzzer_chip) - 1] = '\0';
-        floppy_buzzer_log("Buzzer chip set to %s\n", chip_path);
-        floppy_buzzer_save_config();
-    }
-}
-
-/* Enable/disable buzzer */
-void
-floppy_buzzer_enable(int enable)
-{
-    buzzer.fdd_buzzer_enabled = enable ? 1 : 0;
-    floppy_buzzer_log("Buzzer %s\n", enable ? "enabled" : "disabled");
-    floppy_buzzer_save_config();
-}
-
-/* Runtime configuration functions */
-int
-floppy_buzzer_get_gpio_enabled(void)
-{
-    return buzzer.gpio_enabled;
-}
-
-void
-floppy_buzzer_set_gpio_enabled(int enabled)
-{
-    buzzer.gpio_enabled = enabled ? 1 : 0;
-    floppy_buzzer_log("GPIO %s\n", enabled ? "enabled" : "disabled");
-    floppy_buzzer_save_config();
-}
-
-int
-floppy_buzzer_get_fdd_buzzer_enabled(void)
-{
-    return buzzer.fdd_buzzer_enabled;
-}
-
-void
-floppy_buzzer_set_fdd_buzzer_enabled(int enabled)
-{
-    buzzer.fdd_buzzer_enabled = enabled ? 1 : 0;
-    floppy_buzzer_log("Floppy buzzer %s\n", enabled ? "enabled" : "disabled");
-    floppy_buzzer_save_config();
-}
-
-int
-floppy_buzzer_get_pin(void)
-{
-    return buzzer.buzzer_pin;
-}
-
-const char *
-floppy_buzzer_get_chip(void)
-{
-    return buzzer.buzzer_chip;
+    global_speaker.state = SPEAKER_STATE_IDLE;
+    fdd_buzzer_log("Floppy speaker seek DONE\n");
 }

@@ -1375,7 +1375,7 @@ pc_init_modules(void)
     video_init();
 
     fdd_init();
-    floppy_buzzer_init();
+    fdd_buzzer_init();
 
     sound_init();
 
@@ -1801,7 +1801,7 @@ pc_close(UNUSED(thread_t *ptr))
 
     scsi_disk_close();
 
-    floppy_buzzer_close();
+    fdd_buzzer_cleanup();
 
     gdbstub_close();
 

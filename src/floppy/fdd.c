@@ -242,7 +242,8 @@ fdd_forced_seek(int drive, int track_diff)
     if (fdd[drive].track > drive_types[fdd[drive].type].max_track)
         fdd[drive].track = drive_types[fdd[drive].type].max_track;
 
-    floppy_buzzer_seek(drive, track_diff);
+    if (track_diff > 0 && fdd[drive].track <= drive_types[fdd[drive].type].max_track)
+         fdd_buzzer_seek(track_diff);
 
     fdd_do_seek(drive, fdd[drive].track);
 }
@@ -263,7 +264,8 @@ fdd_seek(int drive, int track_diff)
 
     fdd_changed[drive] = 0;
 
-    floppy_buzzer_seek(drive, track_diff);
+     if (track_diff > 0 && fdd[drive].track <= drive_types[fdd[drive].type].max_track)
+         fdd_buzzer_seek(track_diff);
 
     fdd_do_seek(drive, fdd[drive].track);
 }
@@ -417,6 +419,8 @@ fdd_set_head(int drive, int head)
         fdd[drive].head = 0;
     else
         fdd[drive].head = head;
+
+    fdd_buzzer_step_pulse();
 }
 
 int
@@ -556,10 +560,8 @@ fdd_set_motor_enable(int drive, int motor_enable)
     /* I think here is where spin-up and spin-down should be implemented. */
     if (motor_enable && !motoron[drive]) {
         timer_set_delay_u64(&fdd_poll_time[drive], fdd_byteperiod(drive));
-        floppy_buzzer_motor_on(drive);
     } else if (!motor_enable) {
         timer_disable(&fdd_poll_time[drive]);
-        floppy_buzzer_motor_off(drive);
     }
     motoron[drive] = motor_enable;
 }
@@ -579,8 +581,6 @@ fdd_poll(void *priv)
 
     if (drv->poll) {
         drv->poll(drive);
-        /* Signal R/W activity when polling is active */
-        floppy_buzzer_activity(drive);
     }
 
     if (fdd_notfound) {
