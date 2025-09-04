@@ -174,6 +174,9 @@ int http_api_init(void)
         return -1;
     }
 
+    // Disable Mongoose logging
+    mg_log_set(MG_LL_NONE);
+
     // Initialize the manager first
     mg_mgr_init(g_mgr);
 
