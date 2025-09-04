@@ -169,6 +169,25 @@ if(CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
     SET(CMAKE_EXE_LINKER_FLAGS "-Wl,-z,wxneeded")
 endif()
 
+# Find gpiod library for GPIO support on Linux
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(GPIOD libgpiod)
+        if(GPIOD_FOUND)
+            option(GPIO "GPIO support via libgpiod" ON)
+        else()
+            option(GPIO "GPIO support via libgpiod" OFF)
+            message(WARNING "libgpiod not found - GPIO support will be disabled")
+        endif()
+    else()
+        option(GPIO "GPIO support via libgpiod" OFF)
+        message(WARNING "PkgConfig not found - GPIO support will be disabled")
+    endif()
+else()
+    set(GPIO OFF)
+endif()
+
 # Development branch features
 #
 #                      Option         Description                                Def.  Condition     Otherwise

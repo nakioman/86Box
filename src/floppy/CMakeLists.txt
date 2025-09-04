@@ -31,6 +31,7 @@ add_library(fdd OBJECT
     fdd_pcjs.c
     fdd_mfm.c
     fdd_td0.c
+    fdd_buzzer.c
 )
 
 add_subdirectory(lzw)

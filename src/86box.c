@@ -107,6 +107,7 @@
 #include <86box/apm.h>
 #include <86box/acpi.h>
 #include <86box/nv/vid_nv_rivatimer.h>
+#include <86box/fdd_buzzer.h>
 
 // Disable c99-designator to avoid the warnings about int ng
 #ifdef __clang__
@@ -1374,6 +1375,7 @@ pc_init_modules(void)
     video_init();
 
     fdd_init();
+    fdd_buzzer_init();
 
     sound_init();
 
@@ -1798,6 +1800,8 @@ pc_close(UNUSED(thread_t *ptr))
     mo_close();
 
     scsi_disk_close();
+
+    fdd_buzzer_cleanup();
 
     gdbstub_close();
 
