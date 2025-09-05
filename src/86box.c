@@ -108,6 +108,8 @@
 #include <86box/acpi.h>
 #include <86box/nv/vid_nv_rivatimer.h>
 #include <86box/fdd_buzzer.h>
+#include <86box/hdd_led.h>
+
 
 // Disable c99-designator to avoid the warnings about int ng
 #ifdef __clang__
@@ -1380,6 +1382,7 @@ pc_init_modules(void)
     sound_init();
 
     hdc_init();
+    hdd_led_init();
 
     video_reset_close();
 
@@ -1802,6 +1805,8 @@ pc_close(UNUSED(thread_t *ptr))
     scsi_disk_close();
 
     fdd_buzzer_cleanup();
+
+    hdd_led_cleanup();
 
     gdbstub_close();
 

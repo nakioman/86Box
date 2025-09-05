@@ -19,6 +19,7 @@ add_library(hdd OBJECT
     hdd.c
     hdd_image.c
     hdd_table.c
+    hdd_led.c
     hdc.c
     hdc_st506_xt.c
     hdc_st506_at.c

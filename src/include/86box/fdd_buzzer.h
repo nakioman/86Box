@@ -19,16 +19,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <time.h>
-#include <gpiod.h>
 
 /* Configuration constants */
-#define DEFAULT_SPEAKER_PIN 20  /* GPIO18 (Pin 12) */
+#define DEFAULT_SPEAKER_PIN 20  /* GPIO20 (Pin 38) */
 #define DEFAULT_STEP_VOLUME 1   /* Volume level 0-100 */
-#define DEFAULT_GPIO_CHIP "/dev/gpiochip0"
-
-/* Notification volume flags */
-#define NOTIFY_VOLUME_MASK 0x7F /* 7 bits for 0-100 volume */
-#define NOTIFY_SLOTNR      0x80
 
 /* Speaker states */
 typedef enum {
@@ -44,10 +38,9 @@ typedef struct {
     uint32_t speaker_pin;   /* GPIO pin number for speaker */
 } floppy_speaker_config_t;
 
-/* Speaker control structure */
+/* Speaker control structure - simplified to use generic GPIO system */
 typedef struct {
-    struct gpiod_chip *chip;        /* GPIO chip */
-    struct gpiod_line_request *request; /* GPIO line request */
+    int gpio_pin_id;                /* GPIO pin ID from gpio system */
     speaker_state_t state;          /* Current speaker state */
     struct timespec start_time;     /* Start time for pulse timing */
     bool initialized;               /* Initialization flag */
