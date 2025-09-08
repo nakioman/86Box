@@ -30,6 +30,7 @@
 #include <86box/cdrom.h>
 #include <86box/video.h>
 #include "cpu.h"
+#include <86box/hdd_buzzer.h>
 
 #define HDD_OVERHEAD_TIME 50.0
 
@@ -201,6 +202,9 @@ hdd_seek_get_time(hard_disk_t *hdd, uint32_t dst_addr, uint8_t operation, uint8_
         hdd->cur_addr     = dst_addr;
         hdd->cur_track    = new_track;
         hdd->cur_cylinder = new_cylinder;
+
+        if (cylinder_diff > 0)
+            hdd_buzzer_click();
     }
 
     return seek_time;

@@ -25,6 +25,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <86box/fdd_buzzer.h>
+#include <86box/gpio.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,7 +35,6 @@
 #include <time.h>
 #include <stdarg.h>
 #include <math.h>
-#include <gpiod.h>
 #include <86box/86box.h>
 #include <86box/timer.h>
 #include <86box/thread.h>
@@ -82,92 +82,53 @@ static void delay_us(unsigned int us) {
 
 /* Set GPIO pin state */
 static int set_speaker_pin(bool state) {
-    if (!global_speaker.initialized || !global_speaker.request) {
+    if (!global_speaker.initialized || global_speaker.gpio_pin_id < 0) {
         return -1;
     }
     
-    const enum gpiod_line_value values[1] = { state ? GPIOD_LINE_VALUE_ACTIVE : GPIOD_LINE_VALUE_INACTIVE };
-    int ret = gpiod_line_request_set_values(global_speaker.request, values);
-    return (ret < 0) ? ret : 0;
+    return gpio_set_pin(global_speaker.gpio_pin_id, state);
 }
 
 /* Initialize speaker system */
 int fdd_buzzer_init(void) {
     memset(&global_speaker, 0, sizeof(global_speaker));
+    global_speaker.gpio_pin_id = -1;
 
-    /* Set default or user configuration */
-        if (config_get_int("Unix", "gpio_enabled", 0) == 0) {
-            fdd_buzzer_log("GPIO disabled in configuration, speaker not initialized\n");
+    /* Check configuration settings */
+    if (config_get_int("Unix", "gpio_enabled", 0) == 0) {
+        fdd_buzzer_log("GPIO disabled in configuration, speaker not initialized\n");
+        return -1;
+    }
+
+    if (config_get_int("Unix", "fdd_buzzer_enabled", 0) == 0) {
+        fdd_buzzer_log("Floppy buzzer disabled in configuration, speaker not initialized\n");
+        return -1;
+    }
+
+    global_speaker.config.step_volume = config_get_int("Unix", "fdd_buzzer_volume", DEFAULT_STEP_VOLUME);
+    global_speaker.config.speaker_pin = config_get_int("Unix", "fdd_buzzer_gpio_pin", DEFAULT_SPEAKER_PIN);
+
+    /* Initialize GPIO system if not already initialized */
+    if (!gpio_is_initialized()) {
+        if (gpio_init() != 0) {
+            fdd_buzzer_log("Failed to initialize GPIO system\n");
             return -1;
         }
-
-        if (config_get_int("Unix", "fdd_buzzer_enabled", 0) == 0) {
-            fdd_buzzer_log("Floppy buzzer disabled in configuration, speaker not initialized\n");
-            return -1;
-        }
-
-        global_speaker.config.step_volume = config_get_int("Unix", "fdd_buzzer_volume", DEFAULT_STEP_VOLUME);
-        global_speaker.config.speaker_pin = config_get_int("Unix", "fdd_buzzer_gpio_pin", DEFAULT_SPEAKER_PIN);
-
-
-    /* Open GPIO chip */
-    global_speaker.chip = gpiod_chip_open(config_get_string("Unix", "fdd_buzzer_gpio_chip", DEFAULT_GPIO_CHIP));
-    if (!global_speaker.chip) {
-        fdd_buzzer_log("Failed to open GPIO chip: %s\n", strerror(errno));
-        return -1;
     }
 
-    /* Create line request builder */
-    struct gpiod_line_settings *settings = gpiod_line_settings_new();
-    if (!settings) {
-        fdd_buzzer_log("Failed to create line settings: %s\n", strerror(errno));
-        gpiod_chip_close(global_speaker.chip);
-        return -1;
-    }
+    /* Configure GPIO pin for speaker */
+    gpio_pin_config_t pin_config = {
+        .pin_number = global_speaker.config.speaker_pin,
+        .type = GPIO_PIN_TYPE_OUTPUT,
+        .active_high = true,  /* Assuming active high for buzzer */
+        .consumer_name = "86Box Floppy Buzzer",
+        .initialized = false
+    };
 
-    /* Set as output */
-    gpiod_line_settings_set_direction(settings, GPIOD_LINE_DIRECTION_OUTPUT);
-
-    /* Create line configuration */
-    struct gpiod_line_config *line_cfg = gpiod_line_config_new();
-    if (!line_cfg) {
-        fdd_buzzer_log("Failed to create line config: %s\n", strerror(errno));
-        gpiod_line_settings_free(settings);
-        gpiod_chip_close(global_speaker.chip);
-        return -1;
-    }
-
-    /* Add line configuration */
-    if (gpiod_line_config_add_line_settings(line_cfg, &global_speaker.config.speaker_pin, 1, settings) < 0) {
-        fdd_buzzer_log("Failed to add line settings: %s\n", strerror(errno));
-        gpiod_line_config_free(line_cfg);
-        gpiod_line_settings_free(settings);
-        gpiod_chip_close(global_speaker.chip);
-        return -1;
-    }
-
-    /* Request lines */
-    struct gpiod_request_config *req_cfg = gpiod_request_config_new();
-    if (req_cfg) {
-        gpiod_request_config_set_consumer(req_cfg, "86Box Floppy Buzzer");
-    }
-
-    global_speaker.request = gpiod_chip_request_lines(global_speaker.chip, req_cfg, line_cfg);
-
-    if (req_cfg) {
-        gpiod_request_config_free(req_cfg);
-    }
-    gpiod_line_config_free(line_cfg);
-    gpiod_line_settings_free(settings);
-
-    if (!global_speaker.request) {
-        fdd_buzzer_log("Failed to request GPIO lines: %s\n", strerror(errno));
-        gpiod_chip_close(global_speaker.chip);
-        return -1;
-    }
-    if (!global_speaker.request) {
-        fdd_buzzer_log("Failed to request GPIO line as output: %s\n", strerror(errno));
-        gpiod_chip_close(global_speaker.chip);
+    global_speaker.gpio_pin_id = gpio_configure_pin(&pin_config);
+    if (global_speaker.gpio_pin_id < 0) {
+        fdd_buzzer_log("Failed to configure GPIO pin %u for floppy buzzer\n", 
+                       global_speaker.config.speaker_pin);
         return -1;
     }
 
@@ -175,7 +136,8 @@ int fdd_buzzer_init(void) {
     global_speaker.initialized = true;
     clock_gettime(CLOCK_MONOTONIC, &global_speaker.start_time);
 
-    fdd_buzzer_log("Floppy speaker initialized on GPIO %u\n", global_speaker.config.speaker_pin);
+    fdd_buzzer_log("Floppy speaker initialized on GPIO %u (pin ID %d)\n", 
+                   global_speaker.config.speaker_pin, global_speaker.gpio_pin_id);
     return 0;
 }
 
@@ -187,14 +149,11 @@ void fdd_buzzer_cleanup(void) {
 
     fdd_buzzer_log("Cleaning up floppy speaker\n");
 
-    /* Ensure speaker is off */
-    if (global_speaker.request) {
+    /* Ensure speaker is off and release GPIO pin */
+    if (global_speaker.gpio_pin_id >= 0) {
         set_speaker_pin(false);
-        gpiod_line_request_release(global_speaker.request);
-    }
-
-    if (global_speaker.chip) {
-        gpiod_chip_close(global_speaker.chip);
+        gpio_release_pin(global_speaker.gpio_pin_id);
+        global_speaker.gpio_pin_id = -1;
     }
 
     global_speaker.initialized = false;

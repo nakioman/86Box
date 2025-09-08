@@ -56,6 +56,7 @@ extern "C" {
 #include <86box/thread.h>
 #include <86box/network.h>
 #include <86box/machine_status.h>
+#include <86box/hdd_led.h>
 
 #ifdef Q_OS_WINDOWS
 #    include <86box/win.h>
@@ -358,6 +359,7 @@ ui_sb_update_icon(int tag, int active)
             break;
         case SB_HDD:
             machine_status.hdd[item].active = active > 0 ? true : false;
+            hdd_led_set_state(active > 0);
             break;
         case SB_NETWORK:
             machine_status.net[item].active = active > 0 ? true : false;
@@ -394,6 +396,7 @@ ui_sb_update_icon_write(int tag, int write)
             break;
         case SB_HDD:
             machine_status.hdd[item].write_active = write > 0 ? true : false;
+            hdd_led_set_state(write > 0);
             break;
         case SB_NETWORK:
             machine_status.net[item].write_active = write > 0 ? true : false;

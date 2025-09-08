@@ -52,6 +52,7 @@ add_executable(86Box
     include/http_api.h
     include/mongoose.h
     mongoose.c
+    gpio.c
 )
 
 if(CMAKE_SYSTEM_NAME MATCHES "Linux")
