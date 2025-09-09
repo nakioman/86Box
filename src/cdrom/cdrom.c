@@ -3011,7 +3011,8 @@ cdrom_load(cdrom_t *dev, const char *fn, const int skip_insert)
 
     /* Open the target. */
     if ((strlen(dev->image_path) != 0) &&
-        (strstr(dev->image_path, "ioctl://") == dev->image_path))
+        ((strstr(dev->image_path, "ioctl://") == dev->image_path) ||
+         (strstr(dev->image_path, "/dev") == dev->image_path)))
         dev->local = ioctl_open(dev, dev->image_path);
     else
         dev->local = image_open(dev, dev->image_path);
@@ -3048,7 +3049,7 @@ cdrom_load(cdrom_t *dev, const char *fn, const int skip_insert)
     }
 
 #ifdef ENABLE_CDROM_LOG
-    cdrom_toc_dump(dev);
+        cdrom_toc_dump(dev);    
 #endif
 
     if (!skip_insert && (dev->cd_status != CD_STATUS_EMPTY) && (dev->cd_status != CD_STATUS_DVD_REJECTED)) {

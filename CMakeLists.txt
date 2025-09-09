@@ -250,6 +250,11 @@ if(LIBASAN)
     add_link_options(-fsanitize=address)
 endif()
 
+option(USE_IOCTL "Enable IOCTL support for direct CD-ROM access" OFF)
+if(USE_IOCTL)
+    add_compile_definitions(USE_IOCTL)
+endif()
+
 set(CMAKE_TOP_LEVEL_PROCESSED TRUE)
 
 add_subdirectory(src)
