@@ -102,14 +102,14 @@ void LinuxCDROMNotify::setupCDROMMonitoring()
                 addCDROMDevice(device_path, i);
             }
         }
-    }   
+    }
 }
 
 void LinuxCDROMNotify::onInotifyEvent()
 {
     char buffer[4096];
     ssize_t length = read(inotify_fd, buffer, sizeof(buffer));
-    
+
     if (length == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             qWarning() << "LinuxCDROMNotify: Error reading inotify events:" << strerror(errno);
@@ -118,7 +118,7 @@ void LinuxCDROMNotify::onInotifyEvent()
     }
 
     qDebug() << "LinuxCDROMNotify: inotify event received, checking CD-ROM changes";
-    
+
     // Process all inotify events
     ssize_t i = 0;
     while (i < length) {
@@ -132,9 +132,9 @@ void LinuxCDROMNotify::onInotifyEvent()
                 break;
             }
         }
-        
+
         i += sizeof(struct inotify_event) + event->len;
-    }  
+    }
 }
 
 void LinuxCDROMNotify::processCDROMChange(const QString &path, int cdrom_id)
@@ -142,45 +142,101 @@ void LinuxCDROMNotify::processCDROMChange(const QString &path, int cdrom_id)
     if (cdrom_id < 0 || cdrom_id >= CDROM_NUM) {
         return;
     }
-    
+
     cdrom_t *dev = &cdrom[cdrom_id];
     if (dev->bus_type == 0) {
         return;  // Drive not configured
     }
-    
-    QString device_path = QString::fromLocal8Bit(dev->image_path);
-    if (device_path.isEmpty()) {
-        MediaMenu::ptr->cdromMount(cdrom_id, path);
+
+    int fd = open(path.toLocal8Bit().constData(), O_RDONLY | O_NONBLOCK);
+    if (fd == -1) {
+        qDebug() << "LinuxCDROMNotify: Failed to open device" << path;
+       // QString device_path = QString::fromLocal8Bit(dev->image_path);
+        // if (!device_path.isEmpty()) {
+        //     qDebug() << "LinuxCDROMNotify: Ejecting CD-ROM" << cdrom_id;
+        //     MediaMenu::ptr->cdromEject(cdrom_id);            
+        // }
         return;
     }
+
+    int status = ioctl(fd, CDROM_DRIVE_STATUS, CDSL_CURRENT);
     
-    // Open the device to check for media changes
-    int fd = open(device_path.toLocal8Bit().constData(), O_RDONLY | O_NONBLOCK);
-    if (fd == -1) {
-        MediaMenu::ptr->cdromEject(cdrom_id);
-        return;  // Can't access device
-    }
-    
-    // Check drive status first
-    int drive_status = ioctl(fd, CDROM_DRIVE_STATUS, CDSL_CURRENT);
-    if (drive_status != CDS_DISC_OK) {
+    if (status == CDS_TRAY_OPEN){
+        qDebug() << "LinuxCDROMNotify: Tray open for CD-ROM" << cdrom_id;
         close(fd);
         MediaMenu::ptr->cdromEject(cdrom_id);
-        return;  // No disc or drive not ready
+        return;
     }
-    
+
+    if (status == CDS_DISC_OK) {
+        qDebug() << "LinuxCDROMNotify: Disc present for CD-ROM" << cdrom_id;
+        close(fd);
+        QString device_path = QString::fromLocal8Bit(dev->image_path);
+        if (device_path.isEmpty()) {
+            qDebug() << "LinuxCDROMNotify: Mounting CD-ROM" << cdrom_id;
+            MediaMenu::ptr->cdromMount(cdrom_id, path);
+            return;
+        }
+    }
+
+    switch (status) {
+        case CDS_NO_INFO:       qDebug() << "LinuxCDROMNotify: No info for CD-ROM" << cdrom_id; break;
+        case CDS_NO_DISC:       qDebug() << "LinuxCDROMNotify: No disc in drive for CD-ROM" << cdrom_id; break;
+        case CDS_TRAY_OPEN:     qDebug() << "LinuxCDROMNotify: Tray open for CD-ROM" << cdrom_id; break;
+        case CDS_DRIVE_NOT_READY: qDebug() << "LinuxCDROMNotify: Drive not ready for CD-ROM" << cdrom_id; break;
+        case CDS_DISC_OK:       qDebug() << "LinuxCDROMNotify: Disc present for CD-ROM" << cdrom_id; break;
+        default:                qDebug() << "LinuxCDROMNotify: Unknown status for CD-ROM" << cdrom_id; break;
+    }
+
+    // Check drive status first
+    // int drive_status = ioctl(fd, CDROM_DRIVE_STATUS, CDSL_CURRENT);
+    // if (drive_status != CDS_DISC_OK) {
+    //     qDebug() << "LinuxCDROMNotify: No disc in drive or drive not ready for CD-ROM" << cdrom_id;
+    //     close(fd);
+    //     MediaMenu::ptr->cdromEject(cdrom_id);
+    //     return;  // No disc or drive not ready
+    // }
+
+    // int media_changed = ioctl(fd, CDROM_MEDIA_CHANGED, CDSL_CURRENT);
+    // close(fd);
+    // if (media_changed == 1) {
+    //     QString device_path = QString::fromLocal8Bit(dev->image_path);
+    //     if (device_path.isEmpty()) {
+    //         qDebug() << "LinuxCDROMNotify: Mounting CD-ROM" << cdrom_id;
+    //         MediaMenu::ptr->cdromMount(cdrom_id, path);
+    //         return;
+    //     }
+    // }
+
+    // // Open the device to check for media changes
+    // int fd = open(device_path.toLocal8Bit().constData(), O_RDONLY | O_NONBLOCK);
+    // if (fd == -1) {
+    //     qDebug() << "LinuxCDROMNotify: Failed to open device" << device_path << ":" << strerror(errno);
+    //     MediaMenu::ptr->cdromEject(cdrom_id);
+    //     return;  // Can't access device
+    // }
+
+    // Check drive status first
+    // // int drive_status = ioctl(fd, CDROM_DRIVE_STATUS, CDSL_CURRENT);
+    // // if (drive_status != CDS_DISC_OK) {
+    // //     qDebug() << "LinuxCDROMNotify: No disc in drive or drive not ready for CD-ROM" << cdrom_id;
+    // //     close(fd);
+    // //     MediaMenu::ptr->cdromEject(cdrom_id);
+    // //     return;  // No disc or drive not ready
+    // // }
+
     // Check if media has changed
-    int media_changed = ioctl(fd, CDROM_MEDIA_CHANGED, CDSL_CURRENT);
-    close(fd);
-    
-    if (media_changed == 1) {
-        qDebug() << "LinuxCDROMNotify: Media change detected for CD-ROM" << cdrom_id << "(" << device_path << ")";
-        
-        // Signal 86Box to update the CD-ROM status
-        MediaMenu::ptr->cdromMount(cdrom_id, path);
-        
-        qDebug() << "LinuxCDROMNotify: CD-ROM" << cdrom_id << "status updated";
-    }
+    // int media_changed = ioctl(fd, CDROM_MEDIA_CHANGED, CDSL_CURRENT);
+    // close(fd);
+
+    // if (media_changed == 1) {
+    //     qDebug() << "LinuxCDROMNotify: Media change detected for CD-ROM" << cdrom_id << "(" << device_path << ")";
+
+    //     // Signal 86Box to update the CD-ROM status
+    //     MediaMenu::ptr->cdromMount(cdrom_id, path);
+
+    //     qDebug() << "LinuxCDROMNotify: CD-ROM" << cdrom_id << "status updated";
+    // }
 }
 
 bool LinuxCDROMNotify::addCDROMDevice(const QString &path, int cdrom_id)
@@ -191,17 +247,16 @@ bool LinuxCDROMNotify::addCDROMDevice(const QString &path, int cdrom_id)
             return true;  // Already monitoring
         }
     }
-    
+
     // Add new device to monitoring
     CDROMDevice device;
     device.path = path;
-    device.watch_fd = inotify_add_watch(inotify_fd, path.toLocal8Bit().constData(), 
-                                       IN_MODIFY | IN_ATTRIB | IN_CLOSE_WRITE);
+    device.watch_fd = inotify_add_watch(inotify_fd, path.toLocal8Bit().constData(), IN_ATTRIB);
     device.last_check = 0;
     device.last_capacity = 0;
     device.last_device_id = 0;
     device.cdrom_id = cdrom_id;
-    
+
     if (device.watch_fd != -1) {
         monitored_devices.append(device);
         qDebug() << "LinuxCDROMNotify: Added monitoring for" << path;
