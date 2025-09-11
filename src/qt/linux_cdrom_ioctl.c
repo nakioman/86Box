@@ -725,7 +725,7 @@ linux_ioctl_get_last_block(const void *local)
     /* Find the A2 entry (leadout) to get disc capacity - match Windows logic */
     for (int i = (dev_ioctl->blocks_num - 1); i >= 0; i--) {
         if (rti[i].point == 0xa2) {
-            lb = MSFtoLBA(rti[i].pm, rti[i].ps, rti[i].pf) - 151;
+            lb = MSFtoLBA(rti[i].pm, rti[i].ps, rti[i].pf) - 150;
             linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Found A2 entry at index %d, MSF=%02d:%02d:%02d, LB=%d\n",
                            i, rti[i].pm, rti[i].ps, rti[i].pf, lb);
             break;
