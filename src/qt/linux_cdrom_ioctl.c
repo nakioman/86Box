@@ -20,10 +20,10 @@
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
+#include <scsi/sg.h>
 
-#define ENABLE_IOCTL_LOG 1
 #ifdef ENABLE_IOCTL_LOG
-#include <stdarg.h>
+#    include <stdarg.h>
 #endif
 
 #include <stdio.h>
@@ -39,20 +39,48 @@
 #include <linux/cdrom.h>
 
 typedef struct linux_ioctl_t {
-    cdrom_t     *dev;
-    void        *log;
-    int         is_dvd;
-    int         has_audio;
-    int         blocks_num;      /* Number of TOC entries like Windows */
-    uint8_t     cur_rti[65536];
-    int         fd;
-    char        path[256];
-    int         first_track;
-    int         last_track;
+    cdrom_t          *dev;
+    void             *log;
+    int               is_dvd;
+    int               has_audio;
+    int               blocks_num; /* Number of TOC entries like Windows */
+    raw_track_info_t *tracks;
+    int               fd;
+    char              path[256];
 } linux_ioctl_t;
 
-/* Forward declarations */
-static uint32_t linux_ioctl_get_last_block(const void *local);
+// caching data for performance
+int      prev_track_idx;
+uint32_t prev_sector;
+
+// SCSI command for READ TOC/PMA/ATIP
+typedef struct {
+    uint8_t  opcode;    // 0x43
+    uint8_t  reserved1; // MSF bit in bit 1
+    uint8_t  format;    // Format field
+    uint8_t  reserved2[3];
+    uint8_t  start_track;
+    uint16_t alloc_length; // Big endian
+    uint8_t  control;
+} __attribute__((packed)) scsi_read_toc_cmd_t;
+
+// SCSI command for READ CD
+typedef struct {
+    uint8_t  opcode;     // 0xBE
+    uint8_t  misc;       // Expected sector type, etc.
+    uint32_t lba;        // Big endian
+    uint8_t  len[3];     // Big endian, transfer length in sectors
+    uint8_t  flags;      // Main channel selection
+    uint8_t  subchannel; // Sub-channel selection
+    uint8_t  control;
+} __attribute__((packed)) scsi_read_cd_cmd_t;
+
+// TOC response header
+typedef struct {
+    uint16_t data_length; // Big endian
+    uint8_t  first_session;
+    uint8_t  last_session;
+} __attribute__((packed)) toc_header_t;
 
 #ifdef ENABLE_IOCTL_LOG
 int ioctl_do_log = ENABLE_IOCTL_LOG;
@@ -61,7 +89,7 @@ static void
 linux_ioctl_log(void *priv, const char *fmt, ...)
 {
     va_list ap;
-    
+
     if (ioctl_do_log) {
         va_start(ap, fmt);
         pclog_ex(fmt, ap);
@@ -69,10 +97,28 @@ linux_ioctl_log(void *priv, const char *fmt, ...)
     }
 }
 #else
-#define linux_ioctl_log(priv, fmt, ...)
+#    define linux_ioctl_log(priv, fmt, ...)
 #endif
 
 /* Internal functions. */
+uint16_t
+cpu_to_be16(uint16_t val)
+{ // Convert host byte order to big endian 16-bit
+    return ((val & 0xFF) << 8) | ((val >> 8) & 0xFF);
+}
+
+uint32_t
+cpu_to_be32(uint32_t val)
+{ // Convert host byte order to big endian 32-bit
+    return ((val & 0xFF) << 24) | ((val & 0xFF00) << 8) | ((val >> 8) & 0xFF00) | ((val >> 24) & 0xFF);
+}
+
+uint16_t
+be16_to_cpu(uint16_t val)
+{ // Convert big endian 16-bit to host byte order
+    return ((val & 0xFF) << 8) | ((val >> 8) & 0xFF);
+}
+
 static void
 linux_ioctl_close_handle(const linux_ioctl_t *dev_ioctl)
 {
@@ -82,344 +128,264 @@ linux_ioctl_close_handle(const linux_ioctl_t *dev_ioctl)
     }
 }
 
-// Add to linux_ioctl_open_handle() after successful open
-static void linux_ioctl_set_max_speed(linux_ioctl_t *dev_ioctl)
+static void
+linux_ioctl_set_max_speed(linux_ioctl_t *dev_ioctl)
 {
     // Method 1: Set to maximum speed (-1)
     if (ioctl(dev_ioctl->fd, CDROM_SELECT_SPEED, -1) == 0) {
         linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Set to maximum speed\n");
         return;
     }
-    
+
     // Method 2: Try common high speeds in descending order
-    int speeds[] = {52, 48, 40, 32, 24, 16, 12, 8, 4, 2, 1, 0};
+    int speeds[] = { 52, 48, 40, 32, 24, 16, 12, 8, 4, 2, 1, 0 };
     for (int i = 0; speeds[i] > 0; i++) {
         if (ioctl(dev_ioctl->fd, CDROM_SELECT_SPEED, speeds[i]) == 0) {
             linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Set speed to %dx\n", speeds[i]);
             return;
         }
     }
-    
+
     linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Failed to set any speed\n");
 }
 
 static int
 linux_ioctl_open_handle(linux_ioctl_t *dev_ioctl)
 {
-    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Opening device: %s\n", dev_ioctl->path);    
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Opening device: %s\n", dev_ioctl->path);
 
     // Use regular blocking open since we'll use async I/O for reads
     dev_ioctl->fd = open(dev_ioctl->path, O_RDONLY);
-    
+
     if (dev_ioctl->fd < 0) {
-        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Failed to open %s: %s\n", 
-                       dev_ioctl->path, strerror(errno));
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Failed to open %s: %s\n",
+                        dev_ioctl->path, strerror(errno));
         return 0;
     }
 
-    // Set maximum speed
-    linux_ioctl_set_max_speed(dev_ioctl);
-    
     linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Successfully opened device fd=%d\n", dev_ioctl->fd);
     return 1;
 }
 
 static int
-linux_ioctl_read_toc(linux_ioctl_t *dev_ioctl, uint8_t *toc_buf, int32_t *tracks_num)
-{
-    struct cdrom_tochdr toc_hdr;
-    struct cdrom_tocentry toc_entry;
-    int i;
-    uint8_t *buf_ptr = toc_buf;
-    
-    *tracks_num = 0;
-    memset(toc_buf, 0x00, 65536);
-    
-    /* Get TOC header */
-    if (ioctl(dev_ioctl->fd, CDROMREADTOCHDR, &toc_hdr) < 0) {
-        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Failed to read TOC header: %s\n", strerror(errno));
-        return 0;
-    }
-    
-    dev_ioctl->first_track = toc_hdr.cdth_trk0;
-    dev_ioctl->last_track = toc_hdr.cdth_trk1;
-    *tracks_num = toc_hdr.cdth_trk1;
-    
-    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: TOC: first track %d, last track %d\n", 
-                   toc_hdr.cdth_trk0, toc_hdr.cdth_trk1);
-    
-    /* Write TOC header to buffer */
-    buf_ptr[0] = 0; /* Length high byte */
-    buf_ptr[1] = ((*tracks_num + 1) * 8) + 2; /* Length low byte */
-    buf_ptr[2] = toc_hdr.cdth_trk0; /* First track */
-    buf_ptr[3] = toc_hdr.cdth_trk1; /* Last track */
-    buf_ptr += 4;
-    
-    /* Read each track entry */
-    for (i = toc_hdr.cdth_trk0; i <= toc_hdr.cdth_trk1; i++) {
-        toc_entry.cdte_track = i;
-        toc_entry.cdte_format = CDROM_MSF;
-        
-        if (ioctl(dev_ioctl->fd, CDROMREADTOCENTRY, &toc_entry) < 0) {
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Failed to read TOC entry %d: %s\n", 
-                           i, strerror(errno));
-            continue;
-        }
-        
-        buf_ptr[0] = 0; /* Reserved */
-        buf_ptr[1] = (toc_entry.cdte_ctrl << 4) | toc_entry.cdte_adr;
-        buf_ptr[2] = i; /* Track number */
-        buf_ptr[3] = 0; /* Reserved */
-        buf_ptr[4] = 0; /* Start address - reserved */
-        buf_ptr[5] = toc_entry.cdte_addr.msf.minute;
-        buf_ptr[6] = toc_entry.cdte_addr.msf.second;
-        buf_ptr[7] = toc_entry.cdte_addr.msf.frame;
-        buf_ptr += 8;
-        
-        if (!(toc_entry.cdte_ctrl & CDROM_DATA_TRACK)) {
-            dev_ioctl->has_audio = 1;
-        }
-    }
-    
-    /* Read leadout track */
-    toc_entry.cdte_track = CDROM_LEADOUT;
-    toc_entry.cdte_format = CDROM_MSF;
-    
-    if (ioctl(dev_ioctl->fd, CDROMREADTOCENTRY, &toc_entry) == 0) {
-        buf_ptr[0] = 0; /* Reserved */
-        buf_ptr[1] = (toc_entry.cdte_ctrl << 4) | toc_entry.cdte_adr;
-        buf_ptr[2] = 0xAA; /* Leadout track number */
-        buf_ptr[3] = 0; /* Reserved */
-        buf_ptr[4] = 0; /* Start address - reserved */
-        buf_ptr[5] = toc_entry.cdte_addr.msf.minute;
-        buf_ptr[6] = toc_entry.cdte_addr.msf.second;
-        buf_ptr[7] = toc_entry.cdte_addr.msf.frame;
-        
-        /* Calculate total blocks from leadout position */
-        int minute = toc_entry.cdte_addr.msf.minute;
-        int second = toc_entry.cdte_addr.msf.second;
-        int frame = toc_entry.cdte_addr.msf.frame;
-        
-        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Leadout MSF: %02d:%02d:%02d\n", 
-                       minute, second, frame);
-        
-        /* Try LBA format as MSF seems unreliable */
-        toc_entry.cdte_format = CDROM_LBA;
-        if (ioctl(dev_ioctl->fd, CDROMREADTOCENTRY, &toc_entry) == 0) {
-            dev_ioctl->blocks_num = toc_entry.cdte_addr.lba;
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Using LBA leadout: %d blocks\n", 
-                           dev_ioctl->blocks_num);
-        } else {
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: LBA leadout failed, using MSF calculation\n");
-            /* Fallback to MSF calculation with bounds checking */
-            if (minute <= 99 && second <= 59 && frame <= 74) {
-                dev_ioctl->blocks_num = (minute * 60 * 75) + (second * 75) + frame - 150;
-            } else {
-                linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Invalid MSF, defaulting to safe size\n");
-                dev_ioctl->blocks_num = 74 * 60 * 75; /* Default to 74 minute CD */
-            }
-        }
-        
-        /* Additional sanity check */
-        if (dev_ioctl->blocks_num <= 0 || dev_ioctl->blocks_num > 90 * 60 * 75) {
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Unreasonable block count %d, using default\n", 
-                           dev_ioctl->blocks_num);
-            dev_ioctl->blocks_num = 74 * 60 * 75; /* 74 minute CD default */
-        }
-    } else {
-        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Failed to read leadout track\n");
-        dev_ioctl->blocks_num = 74 * 60 * 75; /* Default size */
-    }
-    
-    return 1;
-}
-
-static void
 linux_ioctl_read_raw_toc(linux_ioctl_t *dev_ioctl)
 {
-    uint8_t toc_buf[65536];
-    int32_t tracks_num = 0;
-    raw_track_info_t *rti = (raw_track_info_t *) dev_ioctl->cur_rti;
-    
-    /* Detect DVD capability like Windows does */
-    int dvd_caps = ioctl(dev_ioctl->fd, CDROM_GET_CAPABILITY, 0);
-    if (dvd_caps >= 0) {
-        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Drive capabilities=0x%08X\n", dvd_caps);
-        
-        /* Check multiple DVD capability flags */
-        dev_ioctl->is_dvd = 0;
-        if (dvd_caps & CDC_DVD) {
-            dev_ioctl->is_dvd = 1;
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Detected DVD drive via CDC_DVD (0x%08X)\n", CDC_DVD);
-        }
-        if (dvd_caps & CDC_DVD_R) {
-            dev_ioctl->is_dvd = 1;
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Detected DVD drive via CDC_DVD_R (0x%08X)\n", CDC_DVD_R);
-        }
-        if (dvd_caps & CDC_DVD_RAM) {
-            dev_ioctl->is_dvd = 1;
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Detected DVD drive via CDC_DVD_RAM (0x%08X)\n", CDC_DVD_RAM);
-        }
-        
-        /* Also check for CD-R/RW capabilities which DVD drives usually have */
-        if (!dev_ioctl->is_dvd && (dvd_caps & (CDC_CD_R | CDC_CD_RW))) {
-            /* If it can write CDs and has other advanced features, likely a DVD drive */
-            if (dvd_caps & (CDC_MRW | CDC_MRW_W | CDC_RAM)) {
-                dev_ioctl->is_dvd = 1;
-                linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Detected DVD drive via advanced features (CD-R/RW + MRW/RAM)\n");
-            }
-        }
-        
-        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Final DVD detection result: is_dvd=%d\n", dev_ioctl->is_dvd);
-    } else {
-        dev_ioctl->is_dvd = 0;
-        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: CDROM_GET_CAPABILITY failed: %s, assuming CD-ROM only\n", strerror(errno));
-    }
-    
-    dev_ioctl->has_audio = 0;
-    dev_ioctl->blocks_num = 0;  /* This will track TOC entries like Windows */
-    memset(dev_ioctl->cur_rti, 0x00, 65536);
-    
-    /* Read normal TOC first to get track info */
-    int status = linux_ioctl_read_toc(dev_ioctl, toc_buf, &tracks_num);
-    
-    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Normal TOC read status=%d, tracks_num=%d\n", status, tracks_num);
-    
-    if (status && (tracks_num >= 1)) {
-        /* Build raw TOC entries exactly like Windows implementation */
-        struct cdrom_tocentry toc_entry;
-        
-        /* Get the last track info for control/ADR values */
-        toc_entry.cdte_track = tracks_num;
-        toc_entry.cdte_format = CDROM_MSF;
-        
-        if (ioctl(dev_ioctl->fd, CDROMREADTOCENTRY, &toc_entry) == 0) {
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Last track ADR=%d, Control=%d\n", 
-                           toc_entry.cdte_adr, toc_entry.cdte_ctrl);
-            
-            /* A0 entry - first track number */
-            rti[0].adr_ctl = ((toc_entry.cdte_adr & 0xf) << 4) | (toc_entry.cdte_ctrl & 0xf);
-            rti[0].point = 0xa0;
-            rti[0].pm = dev_ioctl->first_track;
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: A0 entry: adr_ctl=0x%02X, pm=%d\n", 
-                           rti[0].adr_ctl, rti[0].pm);
-            
-            /* A1 entry - last track number */  
-            rti[1].adr_ctl = rti[0].adr_ctl;
-            rti[1].point = 0xa1;
-            rti[1].pm = dev_ioctl->last_track;
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: A1 entry: adr_ctl=0x%02X, pm=%d\n", 
-                           rti[1].adr_ctl, rti[1].pm);
-            
-            /* A2 entry - leadout start address */
-            struct cdrom_tocentry leadout_entry;
-            leadout_entry.cdte_track = CDROM_LEADOUT;
-            leadout_entry.cdte_format = CDROM_MSF;
-            
-            if (ioctl(dev_ioctl->fd, CDROMREADTOCENTRY, &leadout_entry) == 0) {
-                rti[2].adr_ctl = rti[0].adr_ctl;
-                rti[2].point = 0xa2;
-                rti[2].pm = leadout_entry.cdte_addr.msf.minute;
-                rti[2].ps = leadout_entry.cdte_addr.msf.second;
-                rti[2].pf = leadout_entry.cdte_addr.msf.frame;
-                linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: A2 entry: adr_ctl=0x%02X, MSF=%02d:%02d:%02d\n", 
-                               rti[2].adr_ctl, rti[2].pm, rti[2].ps, rti[2].pf);
-            }
-            
-            dev_ioctl->blocks_num = 3;  /* A0, A1, A2 entries */
-            
-            /* Add individual track entries - should be all tracks, not (tracks_num - 1) */
-            for (int i = 0; i < tracks_num; i++) {
-                raw_track_info_t *crt = &(rti[dev_ioctl->blocks_num]);
-                
-                toc_entry.cdte_track = i + 1;  /* Track numbers start at 1 */
-                toc_entry.cdte_format = CDROM_MSF;
-                
-                if (ioctl(dev_ioctl->fd, CDROMREADTOCENTRY, &toc_entry) == 0) {
-                    crt->adr_ctl = ((toc_entry.cdte_adr & 0xf) << 4) | (toc_entry.cdte_ctrl & 0xf);
-                    crt->point = toc_entry.cdte_track;
-                    crt->pm = toc_entry.cdte_addr.msf.minute;
-                    crt->ps = toc_entry.cdte_addr.msf.second;
-                    crt->pf = toc_entry.cdte_addr.msf.frame;
-                    
-                    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Track %d: adr_ctl=0x%02X, MSF=%02d:%02d:%02d\n", 
-                                   crt->point, crt->adr_ctl, crt->pm, crt->ps, crt->pf);
-                    
-                    dev_ioctl->blocks_num++;
-                }
-            }
-        } else if (status > 0) {
-            /* Announce that we've had a failure - match Windows logic */
-            status = 0;
-        }
-    }
-    
-    /* Check for audio tracks - match Windows logic exactly */
-    if (dev_ioctl->blocks_num) {
-        for (int i = 0; i < dev_ioctl->blocks_num; i++) {
-            const raw_track_info_t *crt = &(rti[i]);
-            
-            if ((crt->point >= 1) && (crt->point <= 99) && !(crt->adr_ctl & 0x04)) {
-                dev_ioctl->has_audio = 1;
-                break;
-            }
-        }
-    }
-    
-    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Built raw TOC with %d TOC blocks, has_audio=%d\n",
-                   dev_ioctl->blocks_num, dev_ioctl->has_audio);
-    
-    /* Debug: Log all TOC entries like Windows does */
-    for (int i = 0; i < dev_ioctl->blocks_num; i++) {
-        uint8_t *t = (uint8_t *) &rti[i];
-        linux_ioctl_log(dev_ioctl->log, "Block %03i: %02X %02X %02X %02X %02X %02X %02X %02X "
-                       "%02X %02X %02X\n",
-                       i, t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], t[9], t[10]);
-    }
-}
+    scsi_read_toc_cmd_t cdb;
+    sg_io_hdr_t         sg_hdr;
+    uint8_t             sense_buffer[32];
+    uint8_t             data_buffer[2048];
+    toc_header_t       *header;
 
-static int
-linux_ioctl_get_track(const linux_ioctl_t *dev_ioctl, const uint32_t sector)
-{
-    raw_track_info_t *rti = (raw_track_info_t *) dev_ioctl->cur_rti;
-    int track = -1;
-    
-    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: ioctl_get_track() searching for sector %u\n", sector);
-    
-    /* Search backwards through TOC entries like Windows does */
-    for (int i = (dev_ioctl->blocks_num - 1); i >= 0; i--) {
-        const raw_track_info_t *ct = &(rti[i]);
-        const uint32_t start = (ct->pm * 60 * 75) + (ct->ps * 75) + ct->pf - 150;
-        
-        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: ioctl_get_track(): ct: %02X, %08X\n",
-                       ct->point, start);
-        
-        if ((ct->point >= 1) && (ct->point <= 99) && (sector >= start)) {
-            track = i;  /* Return TOC INDEX like Windows, not track number! */
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: ioctl_get_track(): found track: %i\n", i);
+    dev_ioctl->is_dvd     = 0; // TODO: Support dvd
+    dev_ioctl->has_audio  = 0;
+    dev_ioctl->blocks_num = 0;  /* This will track TOC entries */
+    prev_sector           = -1; // Invalidate cache
+    prev_track_idx        = -1;
+
+    // Prepare SCSI command - READ TOC with format 2 (raw TOC)
+    memset(&cdb, 0, sizeof(cdb));
+    cdb.opcode       = 0x43; // READ TOC/PMA/ATIP
+    cdb.reserved1    = 0x02; // MSF bit set (bit 1)
+    cdb.format       = 0x02; // Format 2: Raw TOC
+    cdb.start_track  = 0x01; // Starting session
+    cdb.alloc_length = cpu_to_be16(sizeof(data_buffer));
+    cdb.control      = 0;
+
+    // Prepare SG_IO header
+    memset(&sg_hdr, 0, sizeof(sg_hdr));
+    sg_hdr.interface_id    = 'S';
+    sg_hdr.cmd_len         = sizeof(cdb);
+    sg_hdr.mx_sb_len       = sizeof(sense_buffer);
+    sg_hdr.dxfer_direction = SG_DXFER_FROM_DEV;
+    sg_hdr.dxfer_len       = sizeof(data_buffer);
+    sg_hdr.dxferp          = data_buffer;
+    sg_hdr.cmdp            = (unsigned char *) &cdb;
+    sg_hdr.sbp             = sense_buffer;
+    sg_hdr.timeout         = 10000; // 10 seconds
+
+    // Execute SCSI command
+    if (ioctl(dev_ioctl->fd, SG_IO, &sg_hdr) < 0) {
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: SG_IO ioctl failed: %s\n", strerror(errno));
+        close(dev_ioctl->fd);
+        return -1;
+    }
+
+    // Check for SCSI errors
+    if (sg_hdr.status != 0 || sg_hdr.host_status != 0 || sg_hdr.driver_status != 0) {
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: SCSI command failed: status=0x%02x, host_status=0x%04x, driver_status=0x%04x\n",
+                        sg_hdr.status, sg_hdr.host_status, sg_hdr.driver_status);
+
+        if (sg_hdr.sb_len_wr > 0) {
+            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Sense data: ");
+            for (int i = 0; i < sg_hdr.sb_len_wr && i < 16; i++) {
+                linux_ioctl_log(dev_ioctl->log, "%02x ", sense_buffer[i]);
+            }
+            linux_ioctl_log(dev_ioctl->log, "\n");
+        }
+        close(dev_ioctl->fd);
+        return -1;
+    }
+
+    // Parse response
+    header               = (toc_header_t *) data_buffer;
+    uint16_t data_length = be16_to_cpu(header->data_length);
+
+    printf("TOC Data Length: %d bytes\n", data_length);
+    printf("Sessions: %d to %d\n", header->first_session, header->last_session);
+
+    // Calculate number of descriptors
+    if (data_length < sizeof(toc_header_t)) {
+        linux_ioctl_log(dev_ioctl->log, "Invalid TOC data length %d\n", data_length);
+        close(dev_ioctl->fd);
+        return -1;
+    }
+
+    dev_ioctl->blocks_num = (data_length - sizeof(toc_header_t) + 2) / sizeof(raw_track_info_t);
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Retrieved %d TOC entries\n", dev_ioctl->blocks_num);
+
+    if (dev_ioctl->blocks_num <= 0) {
+        linux_ioctl_log(dev_ioctl->log, "No TOC descriptors found\n");
+        close(dev_ioctl->fd);
+        return -1;
+    }
+
+    dev_ioctl->tracks = malloc(dev_ioctl->blocks_num * sizeof(raw_track_info_t));
+    if (!dev_ioctl->tracks) {
+        linux_ioctl_log(dev_ioctl->log, "Memory allocation failure for TOC entries\n");
+        close(dev_ioctl->fd);
+        return -1;
+    }
+
+    // Cast the data buffer directly to our tracks array structure
+    raw_track_info_t *toc_data = (raw_track_info_t *) (data_buffer + sizeof(toc_header_t));
+    memcpy(dev_ioctl->tracks, toc_data, dev_ioctl->blocks_num * sizeof(raw_track_info_t));
+
+    // Determine first and last track numbers
+    for (int i = 0; i < dev_ioctl->blocks_num; i++) {
+        if (dev_ioctl->tracks[i].adr_ctl & 0xF & 4) {
+            dev_ioctl->has_audio = 1;
             break;
         }
     }
-    
-    return track;
+
+#ifdef ENABLE_IOCTL_LOG
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: TOC Summary - %d entries found:\n", dev_ioctl->blocks_num);
+    for (int i = 0; i < dev_ioctl->blocks_num; i++) {
+        const raw_track_info_t *track = &dev_ioctl->tracks[i]; // Now you can use array indexing
+        uint8_t                 adr   = (track->adr_ctl >> 4) & 0xF;
+        uint8_t                 ctl   = track->adr_ctl & 0xF;
+
+        if (adr == 1) { // Position information
+            if (track->point >= 1 && track->point <= 99) {
+                linux_ioctl_log(dev_ioctl->log, "Track %02d: Start at %02d:%02d:%02d, %s, %s (index %d)\n",
+                                track->point, track->pm, track->ps, track->pf,
+                                (ctl & 4) ? "DATA" : "AUDIO",
+                                (ctl & 2) ? "DIGITAL_COPY_PERMITTED" : "", i);
+            } else if (track->point == 0xA0) {
+                linux_ioctl_log(dev_ioctl->log, "First track: %02d, Disc type: %02X (index %d)\n", track->pm, track->ps, i);
+            } else if (track->point == 0xA1) {
+                linux_ioctl_log(dev_ioctl->log, "Last track: %02d (index %d)\n", track->pm, i);
+            } else if (track->point == 0xA2) {
+                linux_ioctl_log(dev_ioctl->log, "Lead-out start: %02d:%02d:%02d (index %d)\n", track->pm, track->ps, track->pf, i);
+            }
+        }
+    }
+#endif
+
+    return dev_ioctl->blocks_num;
+}
+
+static int
+linux_ioctl_get_track_index(const linux_ioctl_t *dev_ioctl, const uint32_t sector)
+{
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: ioctl_get_track_index() searching for sector %u\n", sector);
+
+    if (sector == prev_sector) {
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: ioctl_get_track_index() cache hit for sector %u, returning index %d\n",
+                        sector, prev_track_idx);
+        return prev_track_idx;
+    }
+
+    /* Sanity check for ridiculous sector numbers */
+    if (sector > 90 * 60 * 75) { /* 90 minute CD max */
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: ioctl_get_track_index() sector %u too large, returning -1\n", sector);
+        return -1;
+    }
+
+    if (!dev_ioctl->tracks || dev_ioctl->blocks_num <= 0) {
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: ioctl_get_track_index() no tracks data\n");
+        return -1;
+    }
+
+    /* Optimized search: find the track with highest start <= sector */
+    int      best_track = -1;
+    uint32_t best_start = 0;
+
+    for (int i = 0; i < dev_ioctl->blocks_num; i++) {
+        const raw_track_info_t *ct = &(dev_ioctl->tracks[i]);
+
+        /* Only consider actual track entries (point 1-99), skip TOC control entries */
+        if (ct->point >= 1 && ct->point <= 99) {
+            const uint32_t start = MSFtoLBA(ct->pm, ct->ps, ct->pf) - 150;
+
+            /* If track start is beyond our sector, we can't use this track */
+            if (start > sector) {
+                continue;
+            }
+
+            /* If this start is better than our current best, use it */
+            if (start >= best_start) {
+                best_track = i;
+                best_start = start;
+
+                /* Perfect match - this track starts exactly at our sector */
+                if (start == sector) {
+                    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: track %d: perfect match at start=%u\n", i, start);
+                    break;
+                }
+            }
+        }
+    }
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: ioctl_get_track_index(%u) found index %d (start=%u)\n",
+                    sector, best_track, best_start);
+
+    prev_sector           = sector;
+    prev_track_idx = best_track;
+    return best_track;
 }
 
 static int
 linux_ioctl_is_track_audio(const linux_ioctl_t *dev_ioctl, const uint32_t pos)
 {
-    const raw_track_info_t *rti = (const raw_track_info_t *) dev_ioctl->cur_rti;
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: ioctl_is_track_audio() called for sector %u\n", pos);
     int ret = 0;
-    
-    if (dev_ioctl->has_audio && !dev_ioctl->is_dvd) {
-        const int track = linux_ioctl_get_track(dev_ioctl, pos);  /* Gets TOC index */
-        if (track != -1) {
-            const int control = rti[track].adr_ctl;
-            ret = !(control & 0x04);
-            
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: ioctl_is_track_audio(%08X, %02X): %i\n", pos, track, ret);
-        }
+
+    /* Sanity check for ridiculous sector numbers */
+    if (pos > 90 * 60 * 75) { /* 90 minute CD max */
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: ioctl_is_track_audio() sector %u too large, returning 0\n", pos);
+        return 0;
     }
-    
+
+    /* Additional check for clearly corrupted values */
+    if (pos > 500000) { /* Even larger than any reasonable CD */
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: ioctl_is_track_audio() sector %u appears corrupted, returning 0\n", pos);
+        return 0;
+    }
+
+    const int idx = linux_ioctl_get_track_index(dev_ioctl, pos);
+    if (idx != -1) {
+        const raw_track_info_t *track   = &dev_ioctl->tracks[idx];
+        const int               control = track->adr_ctl & 0xF; // Extract control bits
+        ret                             = !(control & 4);
+
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: ioctl_is_track_audio(%08X): track_idx=%d, control=0x%02X, ret=%i\n",
+                        pos, idx, control, ret);
+        return ret;
+    }
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: ioctl_is_track_audio(%08X): no track found, ret=%i\n", pos, ret);
     return ret;
 }
 
@@ -429,319 +395,259 @@ linux_ioctl_get_track_info(const void *local, const uint32_t track,
                            int end, track_info_t *ti)
 {
     const linux_ioctl_t *dev_ioctl = (const linux_ioctl_t *) local;
-    struct cdrom_tocentry toc_entry;
-    
-    if (track < (uint32_t)dev_ioctl->first_track || track > (uint32_t)dev_ioctl->last_track) {
-        return 0;
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: get_track_info() called for track %u\n", track);
+
+    for (int i = 0; i < dev_ioctl->blocks_num; i++) {
+        const raw_track_info_t *ct = &(dev_ioctl->tracks[i]);
+        if (ct->point == track) {
+            ti->number = track;
+            ti->attr   = ct->adr_ctl;
+            ti->m      = ct->pm;
+            ti->s      = ct->ps;
+            ti->f      = ct->pf;
+            return 1;
+        }
     }
-    
-    toc_entry.cdte_track = track;
-    toc_entry.cdte_format = CDROM_MSF;
-    
-    if (ioctl(dev_ioctl->fd, CDROMREADTOCENTRY, &toc_entry) != 0) {
-        return 0;
-    }
-    
-    ti->number = track;
-    ti->attr = toc_entry.cdte_ctrl;
-    ti->m = toc_entry.cdte_addr.msf.minute;
-    ti->s = toc_entry.cdte_addr.msf.second;
-    ti->f = toc_entry.cdte_addr.msf.frame;
-    
-    return 1;
+
+    return -1;
 }
 
 static void
 linux_ioctl_get_raw_track_info(const void *local, int *num, uint8_t *rti)
 {
     const linux_ioctl_t *dev_ioctl = (const linux_ioctl_t *) local;
-    
-    *num = dev_ioctl->blocks_num;  /* Number of TOC entries, like Windows */
-    memcpy(rti, dev_ioctl->cur_rti, dev_ioctl->blocks_num * 11);  /* 11 bytes per entry */
-    
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: get_raw_track_info() called\n");
+
+    *num = dev_ioctl->blocks_num; /* Number of TOC entries */
+    memcpy(rti, dev_ioctl->tracks, dev_ioctl->blocks_num * sizeof(raw_track_info_t));
+
     linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Returning %d raw track info blocks\n", *num);
+    return;
 }
 
 static int
 linux_ioctl_is_track_pre(const void *local, const uint32_t sector)
 {
+    const linux_ioctl_t *dev_ioctl = (const linux_ioctl_t *) local;
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: is_track_pre() called for sector %u\n", sector);
+
     /* Linux doesn't easily provide pre-emphasis info, return 0 */
     return 0;
-}
-
-static int
-linux_ioctl_read_sector(const void *local, uint8_t *buffer, const uint32_t sector)
-{
-    const linux_ioctl_t *dev_ioctl = (const linux_ioctl_t *) local;
-    const raw_track_info_t *rti = (const raw_track_info_t *) dev_ioctl->cur_rti;
-    ssize_t bytes_read = 0;
-    const int sc_offs = (sector == 0xffffffff) ? 0 : 2352;
-    int len = (sector == 0xffffffff) ? 16 : 2368;
-    int m = 0, s = 0, f = 0;
-    uint32_t lba = sector;
-    int track = -1;
-    int toc_index = -1;
-    int ret = 0;
-    
-    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: read_sector() called for sector %u (DVD=%d)\n", 
-                   sector, dev_ioctl->is_dvd);
-    
-    if (!dev_ioctl || dev_ioctl->fd < 0 || !buffer) {
-        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: read_sector() invalid parameters: dev_ioctl=%p, fd=%d, buffer=%p\n", 
-                       (void*)dev_ioctl, dev_ioctl ? dev_ioctl->fd : -1, (void*)buffer);
-        return 0;
-    }
-    
-    /* Handle DVD drives (like Windows implementation) */
-    if (dev_ioctl->is_dvd) {
-        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Using DVD drive logic\n");
-        
-        ret = 0;
-        
-        if (lba == 0xffffffff) {
-            lba = dev_ioctl->dev->seek_pos;
-            track = linux_ioctl_get_track(dev_ioctl, lba);  /* Gets TOC index */
-            
-            if (track != -1) {
-                len = 16;  /* Subchannel only */
-                bytes_read = len;  /* Set bytes_read for subchannel */
-                ret = 1;
-            }
-        } else {
-            len = COOKED_SECTOR_SIZE; /* 2048 bytes for DVD drives */
-            track = linux_ioctl_get_track(dev_ioctl, lba);  /* Gets TOC index */
-            
-            if (track != -1) {
-                /* DVD drives use simple file-based reading like Windows */
-                if (lseek(dev_ioctl->fd, (long)lba * COOKED_SECTOR_SIZE, SEEK_SET) != -1) {
-                    bytes_read = read(dev_ioctl->fd, &buffer[16], COOKED_SECTOR_SIZE);
-                    ret = (bytes_read == COOKED_SECTOR_SIZE) ? 1 : 0;
-                    
-                    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: DVD read sector %u: %zd bytes, ret=%d\n",
-                                   sector, bytes_read, ret);
-                } else {
-                    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: DVD seek failed for sector %u: %s\n",
-                                   sector, strerror(errno));
-                }
-            }
-        }
-        
-        if (ret && (bytes_read >= len || len == 16) && (track != -1)) {
-            /* Track is now a TOC index, so we can use it directly */
-            toc_index = track;
-            
-            if (toc_index != -1) {
-                const raw_track_info_t *ct = &rti[toc_index];
-                const uint32_t start = (ct->pm * 60 * 75) + (ct->ps * 75) + ct->pf;
-                
-                m = s = f = 0;
-                
-                /* Construct sector header and sub-header for DVD */
-                if (sector != 0xffffffff) {
-                    /* Sync bytes */
-                    buffer[0] = 0x00;
-                    memset(&buffer[1], 0xff, 10);
-                    buffer[11] = 0x00;
-                    
-                    /* Sector header */
-                    FRAMES_TO_MSF(lba + 150, &m, &s, &f);
-                    buffer[12] = bin2bcd(m);
-                    buffer[13] = bin2bcd(s);
-                    buffer[14] = bin2bcd(f);
-                    
-                    /* Mode 1 data */
-                    buffer[15] = 0x01;
-                }
-                
-                /* Construct Q subchannel */
-                buffer[sc_offs + 0] = (ct->adr_ctl >> 4) | ((ct->adr_ctl & 0xf) << 4);
-                buffer[sc_offs + 1] = bin2bcd(ct->point);
-                buffer[sc_offs + 2] = 1;
-                FRAMES_TO_MSF((int32_t)(lba + 150 - start), &m, &s, &f);
-                buffer[sc_offs + 3] = bin2bcd(m);
-                buffer[sc_offs + 4] = bin2bcd(s);
-                buffer[sc_offs + 5] = bin2bcd(f);
-                FRAMES_TO_MSF(lba + 150, &m, &s, &f);
-                buffer[sc_offs + 7] = bin2bcd(m);
-                buffer[sc_offs + 8] = bin2bcd(s);
-                buffer[sc_offs + 9] = bin2bcd(f);
-            }
-        }
-    } else {
-        /* Handle CD-ROM drives (original logic with improvements) */
-        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Using CD-ROM drive logic\n");
-        
-        /* Special case for subchannel-only read */
-        if (lba == 0xffffffff) {
-            lba = dev_ioctl->dev->seek_pos;
-            track = linux_ioctl_get_track(dev_ioctl, lba);  /* Gets TOC index */
-            if (track == -1) return 0;
-            
-            /* Track is already the TOC index */
-            toc_index = track;
-            
-            /* For subchannel only, we construct Q data */
-            len = 16;
-            ret = 1;
-        } else {
-            /* Get actual disc capacity from A2 entry for bounds check */
-            uint32_t disc_capacity = linux_ioctl_get_last_block(local);
-            
-            /* Bounds check using actual disc capacity */
-            if (disc_capacity > 0 && sector >= disc_capacity) {
-                linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Sector %u beyond disc end (%u blocks)\n", 
-                               sector, disc_capacity);
-                return 0;
-            }
-            
-            track = linux_ioctl_get_track(dev_ioctl, lba);  /* Gets TOC index */
-            if (track == -1) return 0;
-            
-            /* Track is already the TOC index */
-            toc_index = track;
-            
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Track TOC index %d (point=0x%02X)\n", 
-                           toc_index, rti[toc_index].point);
-            
-            /* Clear the buffer first, then construct the sector */
-            memset(buffer, 0, 2368);
-            
-            /* Read cooked data (2048 bytes) into offset 16 like Windows */
-            if (lseek(dev_ioctl->fd, sector * COOKED_SECTOR_SIZE, SEEK_SET) == -1) {
-                linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Seek to sector %u failed: %s\n", 
-                               sector, strerror(errno));
-                return 0;
-            }
-            
-            bytes_read = read(dev_ioctl->fd, &buffer[16], COOKED_SECTOR_SIZE);
-            
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: read_sector(%u) read %zd bytes from fd %d\n", 
-                           sector, bytes_read, dev_ioctl->fd);
-            
-            if (bytes_read != COOKED_SECTOR_SIZE) {
-                linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Read sector %u failed: read %zd bytes, %s\n",
-                               sector, bytes_read, strerror(errno));
-                return 0;
-            }
-            
-            ret = 1;
-            
-            /* Now construct CD-ROM sector header (this won't overwrite the data) */
-            /* Sync bytes - correct CD-ROM sync pattern */
-            buffer[0] = 0x00;
-            memset(&buffer[1], 0xff, 10);
-            buffer[11] = 0x00;
-            
-            /* Show the ISO 9660 data for sector 16 */
-            if (sector == 16) {
-                linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Sector 16 sync+header: ");
-                for (int i = 0; i < 16; i++) {
-                    linux_ioctl_log(dev_ioctl->log, "%02X ", buffer[i]);
-                }
-                linux_ioctl_log(dev_ioctl->log, "\nLinux IOCTL: Sector 16 ISO data: ");
-                for (int i = 16; i < 32; i++) {
-                    linux_ioctl_log(dev_ioctl->log, "%02X ", buffer[i]);
-                }
-                linux_ioctl_log(dev_ioctl->log, " (ASCII: ");
-                for (int i = 16; i < 32; i++) {
-                    linux_ioctl_log(dev_ioctl->log, "%c", (buffer[i] >= 32 && buffer[i] < 127) ? buffer[i] : '.');
-                }
-                linux_ioctl_log(dev_ioctl->log, ")\n");
-            }
-            
-            /* Continue with sector header construction */
-            /* Sector header with MSF address */
-            FRAMES_TO_MSF(lba + 150, &m, &s, &f);
-            buffer[12] = bin2bcd(m);
-            buffer[13] = bin2bcd(s);
-            buffer[14] = bin2bcd(f);
-            buffer[15] = 0x01; /* Mode 1 data */
-            
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Sector %u header: MSF=%02d:%02d:%02d -> BCD=%02X:%02X:%02X\n",
-                           sector, m, s, f, buffer[12], buffer[13], buffer[14]);
-            
-            /* len was already set to 2368 at the top of function for normal sectors */
-            ret = 1;
-        }
-        
-        /* Construct Q subchannel data for CD-ROM drives */
-        if (ret && toc_index != -1) {
-            const raw_track_info_t *ct = &rti[toc_index];
-            const uint32_t start = (ct->pm * 60 * 75) + (ct->ps * 75) + ct->pf;
-            
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Using TOC index %d: adr_ctl=0x%02X, point=%d (raw), start=%u\n",
-                           toc_index, ct->adr_ctl, ct->point, start);
-            
-            /* Construct Q subchannel at the appropriate offset */
-            buffer[sc_offs + 0] = (ct->adr_ctl >> 4) | ((ct->adr_ctl & 0xf) << 4);
-            buffer[sc_offs + 1] = bin2bcd(ct->point);  /* This should be 0x01 for track 1 */
-            buffer[sc_offs + 2] = 1;
-            
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: bin2bcd(%d) = 0x%02X\n", ct->point, bin2bcd(ct->point));
-            FRAMES_TO_MSF((int32_t)(lba + 150 - start), &m, &s, &f);
-            buffer[sc_offs + 3] = bin2bcd(m);
-            buffer[sc_offs + 4] = bin2bcd(s);
-            buffer[sc_offs + 5] = bin2bcd(f);
-            FRAMES_TO_MSF(lba + 150, &m, &s, &f);
-            buffer[sc_offs + 7] = bin2bcd(m);
-            buffer[sc_offs + 8] = bin2bcd(s);
-            buffer[sc_offs + 9] = bin2bcd(f);
-            
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Q data at offset %d: %02X %02X %02X %02X %02X %02X\n",
-                           sc_offs, buffer[sc_offs], buffer[sc_offs+1], buffer[sc_offs+2], 
-                           buffer[sc_offs+3], buffer[sc_offs+4], buffer[sc_offs+5]);
-        }
-    }
-    
-    /* Construct raw subchannel data from Q only like Windows (for both DVD and CD-ROM) */
-    if (ret && (bytes_read >= len || len == 16)) {
-        for (int i = 11; i >= 0; i--) {
-            for (int j = 7; j >= 0; j--) {
-                buffer[2352 + (i * 8) + j] = ((buffer[sc_offs + i] >> (7 - j)) & 0x01) << 6;
-            }
-        }
-    }
-    
-    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: read_sector final result: ret=%d, len=%d\n", ret, len);
-    
-    return ret ? ((bytes_read >= len || len == 16) ? 1 : 0) : -1;
-}
-
-static uint8_t
-linux_ioctl_get_track_type(const void *local, const uint32_t sector)
-{
-    const linux_ioctl_t *dev_ioctl = (const linux_ioctl_t *) local;
-    
-    return linux_ioctl_is_track_audio(dev_ioctl, sector) ? CD_STATUS_HAS_AUDIO : CD_STATUS_DATA_ONLY;
 }
 
 static uint32_t
 linux_ioctl_get_last_block(const void *local)
 {
     const linux_ioctl_t *dev_ioctl = (const linux_ioctl_t *) local;
-    raw_track_info_t *rti = (raw_track_info_t *) dev_ioctl->cur_rti;
-    uint32_t lb = 0;
-    
-    /* Find the A2 entry (leadout) to get disc capacity - match Windows logic */
-    for (int i = (dev_ioctl->blocks_num - 1); i >= 0; i--) {
-        if (rti[i].point == 0xa2) {
-            lb = MSFtoLBA(rti[i].pm, rti[i].ps, rti[i].pf) - 150;
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: get_last_block() called\n");
+
+    for (int i = 0; i < dev_ioctl->blocks_num; i++) {
+        const raw_track_info_t *ct = &(dev_ioctl->tracks[i]);
+        if (ct->point == 0xA2) { // Lead-out track
+            uint32_t lb = MSFtoLBA(ct->pm, ct->ps, ct->pf) - 150;
             linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Found A2 entry at index %d, MSF=%02d:%02d:%02d, LB=%d\n",
-                           i, rti[i].pm, rti[i].ps, rti[i].pf, lb);
-            break;
+                            i, ct->pm, ct->ps, ct->pf, lb);
+            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: get_last_block() returning %d\n", lb);
+            return lb;
         }
     }
-    
-    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: get_last_block() returning %d\n", lb);
-    
-    return lb;
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: No A2 entry found, returning 0\n");
+    return -1;
+}
+
+static int
+linux_ioctl_read_sector(const void *local, uint8_t *buffer, const uint32_t sector)
+{
+    const linux_ioctl_t    *dev_ioctl         = (const linux_ioctl_t *) local;
+    const int               sc_offs           = (sector == 0xffffffff) ? 0 : 2352;
+    int                     len               = (sector == 0xffffffff) ? 16 : 2368;
+    uint32_t                lba               = sector;
+    int                     track             = -1;
+    int                     toc_index         = -1;
+    int                     ret               = 0;
+    int                     bytes_transferred = 0;
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: read_sector() called for sector %u\n", sector);
+
+    if (!dev_ioctl || dev_ioctl->fd < 0 || !buffer) {
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: read_sector() invalid parameters: dev_ioctl=%p, fd=%d, buffer=%p\n",
+                        (void *) dev_ioctl, dev_ioctl ? dev_ioctl->fd : -1, (void *) buffer);
+        return 0;
+    }
+
+    if (lba == 0xffffffff) {
+        lba   = dev_ioctl->dev->seek_pos;
+        track = linux_ioctl_get_track_index(dev_ioctl, lba);
+        if (track == -1)
+            return 0;
+
+        toc_index         = track;
+        len               = 16;
+        ret               = 1;
+        bytes_transferred = len;
+    } else {
+        /* Bounds check */
+        uint32_t disc_capacity = linux_ioctl_get_last_block(local);
+        if (disc_capacity > 0 && sector >= disc_capacity) {
+            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Sector %u beyond disc end (%u blocks)\n",
+                            sector, disc_capacity);
+            return 0;
+        }
+
+        track = linux_ioctl_get_track_index(dev_ioctl, lba);
+        if (track == -1)
+            return 0;
+
+        toc_index = track;
+
+        /* Use SCSI READ CD command like Windows implementation */
+        scsi_read_cd_cmd_t cdb;
+        sg_io_hdr_t        sg_hdr;
+        uint8_t            sense_buffer[32];
+
+        memset(&cdb, 0, sizeof(cdb));
+        cdb.opcode = 0xBE; /* READ CD */
+        cdb.misc   = 0x00;
+        cdb.lba    = cpu_to_be32(sector); /* Starting LBA in big endian */
+        cdb.len[0] = 0x00;
+        cdb.len[1] = 0x00;
+        cdb.len[2] = 0x01; /* Transfer length: 1 sector */
+        /* If sector is FFFFFFFF, only return the subchannel, otherwise return full sector */
+        cdb.flags      = (sector == 0xffffffff) ? 0x00 : 0xf8; /* Main channel selection */
+        cdb.subchannel = 0x02;                                 /* Raw subchannel data */
+        cdb.control    = 0x00;
+
+        /* Prepare SG_IO header */
+        memset(&sg_hdr, 0, sizeof(sg_hdr));
+        sg_hdr.interface_id    = 'S';
+        sg_hdr.cmd_len         = sizeof(cdb);
+        sg_hdr.mx_sb_len       = sizeof(sense_buffer);
+        sg_hdr.dxfer_direction = SG_DXFER_FROM_DEV;
+        sg_hdr.dxfer_len       = len;
+        sg_hdr.dxferp          = buffer;
+        sg_hdr.cmdp            = (unsigned char *) &cdb;
+        sg_hdr.sbp             = sense_buffer;
+        sg_hdr.timeout         = 6000; /* 6 seconds like Windows */
+
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: SCSI READ CD: LBA=%u, len=%d, flags=0x%02X\n",
+                        sector, len, cdb.flags);
+
+        /* Execute SCSI command */
+        if (ioctl(dev_ioctl->fd, SG_IO, &sg_hdr) < 0) {
+            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: SG_IO ioctl failed: %s\n", strerror(errno));
+            return 0;
+        }
+
+        /* Check for SCSI errors like Windows implementation */
+        if (sg_hdr.status != 0 || sg_hdr.host_status != 0 || sg_hdr.driver_status != 0) {
+            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: SCSI READ CD failed: status=0x%02x, host_status=0x%04x, driver_status=0x%04x\n",
+                            sg_hdr.status, sg_hdr.host_status, sg_hdr.driver_status);
+
+            if (sg_hdr.sb_len_wr >= 16) {
+                /* Check for CIRC error like Windows - treat as error to indicate CIRC error to guest */
+                if ((sense_buffer[2] == 0x03) && (sense_buffer[12] == 0x11)) {
+                    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: CIRC error detected\n");
+                    return 0;
+                }
+
+                linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Sense data: ");
+                for (int i = 0; i < sg_hdr.sb_len_wr && i < 16; i++) {
+                    linux_ioctl_log(dev_ioctl->log, "%02x ", sense_buffer[i]);
+                }
+                linux_ioctl_log(dev_ioctl->log, "\n");
+            }
+            return 0;
+        }
+
+        bytes_transferred = len - sg_hdr.resid;
+        ret               = (sg_hdr.resid == 0 || bytes_transferred >= len) ? 1 : 0;
+
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: SCSI READ CD success: transferred %d bytes, resid=%d\n",
+                        bytes_transferred, sg_hdr.resid);
+
+        /* Debug: Show the actual data we read for sector 16 */
+        if (sector == 16 && ret) {
+            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Sector 16 raw data: ");
+            for (int i = 16; i < 32; i++) {
+                linux_ioctl_log(dev_ioctl->log, "%02X ", buffer[i]);
+            }
+            linux_ioctl_log(dev_ioctl->log, " (ASCII: ");
+            for (int i = 16; i < 32; i++) {
+                linux_ioctl_log(dev_ioctl->log, "%c", (buffer[i] >= 32 && buffer[i] < 127) ? buffer[i] : '.');
+            }
+            linux_ioctl_log(dev_ioctl->log, ")\n");
+        }
+    }
+
+    /* Construct raw subchannel data from Q subchannel if we have track info (like Windows) */
+    if (ret && toc_index != -1 && bytes_transferred >= len) {
+
+        /* Windows-style subchannel construction - only if not already present */
+        if (sector != 0xffffffff) {
+            for (int i = 11; i >= 0; i--) {
+                for (int j = 7; j >= 0; j--) {
+                    buffer[2352 + (i * 8) + j] = ((buffer[sc_offs + i] >> (7 - j)) & 0x01) << 6;
+                }
+            }
+        }
+    }
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: read_sector final result: ret=%d, len=%d\n", ret, len);
+
+    return ret ? 1 : -1;
+}
+
+static uint8_t
+linux_ioctl_get_track_type(const void *local, const uint32_t sector)
+{
+    const linux_ioctl_t *dev_ioctl = (const linux_ioctl_t *) local;
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: get_track_type() called for sector %u\n", sector);
+
+    /* Sanity check for ridiculous sector numbers */
+    if (sector > 90 * 60 * 75) { /* 90 minute CD max */
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: get_track_type() sector %u too large, returning 0x00\n", sector);
+        return 0x00;
+    }
+
+    /* Additional check for clearly corrupted values */
+    if (sector > 500000) { /* Even larger than any reasonable CD */
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: get_track_type() sector %u appears corrupted, returning 0x00\n", sector);
+        return 0x00;
+    }
+
+    int track_idx = linux_ioctl_get_track_index(dev_ioctl, sector);
+    if (track_idx == -1) {
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: get_track_type() no track found, returning 0x00\n");
+        return 0x00;
+    }
+
+    uint8_t ret;
+    if (linux_ioctl_is_track_audio(dev_ioctl, sector)) {
+        ret = CD_TRACK_AUDIO;
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: get_track_type() audio track, returning 0x%02X\n", ret);
+    } else {
+        // For data tracks, return CD_TRACK_NORMAL (Mode 1)
+        ret = CD_TRACK_NORMAL;
+        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: get_track_type() data track, returning 0x%02X\n", ret);
+    }
+
+    return ret;
 }
 
 static int
 linux_ioctl_read_dvd_structure(const void *local, const uint8_t layer, const uint8_t format,
                                uint8_t *buffer, uint32_t *info)
 {
-    /* TODO: Implement DVD structure reading */
+    const linux_ioctl_t *dev_ioctl = (const linux_ioctl_t *) local;
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: read_dvd_structure() called for layer %u, format %u\n",
+                    layer, format);
+    /* This is not a DVD, return 0. */
     return 0;
 }
 
@@ -749,7 +655,9 @@ static int
 linux_ioctl_is_dvd(const void *local)
 {
     const linux_ioctl_t *dev_ioctl = (const linux_ioctl_t *) local;
-    
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: is_dvd() called\n");
+
     return dev_ioctl->is_dvd;
 }
 
@@ -757,7 +665,9 @@ static int
 linux_ioctl_has_audio(const void *local)
 {
     const linux_ioctl_t *dev_ioctl = (const linux_ioctl_t *) local;
-    
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: has_audio() called\n");
+
     return dev_ioctl->has_audio;
 }
 
@@ -765,16 +675,18 @@ static int
 linux_ioctl_is_empty(const void *local)
 {
     const linux_ioctl_t *dev_ioctl = (const linux_ioctl_t *) local;
-    
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: is_empty() called\n");
+
     if (dev_ioctl->fd < 0) {
         return 1;
     }
-    
+
     if (ioctl(dev_ioctl->fd, CDROM_DRIVE_STATUS, CDSL_CURRENT) != CDS_DISC_OK) {
         linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: No disc in drive\n");
         return 1;
     }
-    
+
     return 0;
 }
 
@@ -782,7 +694,9 @@ static void
 linux_ioctl_close(void *local)
 {
     linux_ioctl_t *dev_ioctl = (linux_ioctl_t *) local;
-    
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: close() called\n");
+
     if (dev_ioctl) {
         linux_ioctl_close_handle(dev_ioctl);
         free(dev_ioctl);
@@ -793,36 +707,18 @@ static void
 linux_ioctl_load(const void *local)
 {
     linux_ioctl_t *dev_ioctl = (linux_ioctl_t *) local;
-    
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: load() called\n");
+
     if (!dev_ioctl || dev_ioctl->fd < 0) {
         return;
     }
-    
-    // Check if media has changed using Linux ioctl
-    int media_changed = ioctl(dev_ioctl->fd, CDROM_MEDIA_CHANGED, CDSL_CURRENT);
-    
-    if (media_changed == 1) {
-        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Media change detected, reloading TOC\n");
-        
-        // Clear old data
-        memset(dev_ioctl->cur_rti, 0, sizeof(dev_ioctl->cur_rti));
-        dev_ioctl->blocks_num = 0;
-        dev_ioctl->has_audio = 0;
-        dev_ioctl->is_dvd = 0;
-        
-        // Re-read TOC to detect new media
+
+    linux_ioctl_set_max_speed(dev_ioctl);
+
+    /* Re-read TOC on load */
+    if (dev_ioctl->blocks_num <= 0)
         linux_ioctl_read_raw_toc(dev_ioctl);
-        
-        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Media reload complete\n");
-    } else if (media_changed == 0) {
-        // No change, but still refresh if we don't have valid data
-        if (dev_ioctl->blocks_num == 0) {
-            linux_ioctl_read_raw_toc(dev_ioctl);
-        }
-    } else {
-        // Error or no media - this is normal, don't log as error
-        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: No media or media check failed\n");
-    }
 }
 
 static const cdrom_ops_t linux_ioctl_ops = {
@@ -845,59 +741,32 @@ void *
 ioctl_open(cdrom_t *dev, const char *drv)
 {
     linux_ioctl_t *dev_ioctl;
-    
+
     dev_ioctl = (linux_ioctl_t *) malloc(sizeof(linux_ioctl_t));
     if (!dev_ioctl) {
         return NULL;
     }
-    
+
     memset(dev_ioctl, 0, sizeof(linux_ioctl_t));
-    
+
     dev_ioctl->dev = dev;
-    dev_ioctl->fd = -1;
-    
+    dev_ioctl->fd  = -1;
+
     /* Copy device path */
-    if (drv && strlen(drv) > 0) {
-        strncpy(dev_ioctl->path, drv, sizeof(dev_ioctl->path) - 1);
-        dev_ioctl->path[sizeof(dev_ioctl->path) - 1] = '\0';
-    } else {
-        /* Try common device paths if no specific path given */
-        const char *common_paths[] = {
-            "/dev/sr0", "/dev/sr1", "/dev/sr2", "/dev/sr3",
-            "/dev/cdrom", "/dev/dvd", "/dev/cdrw",
-            NULL
-        };
-        
-        for (int i = 0; common_paths[i]; i++) {
-            strncpy(dev_ioctl->path, common_paths[i], sizeof(dev_ioctl->path) - 1);
-            dev_ioctl->path[sizeof(dev_ioctl->path) - 1] = '\0';
-            if (linux_ioctl_open_handle(dev_ioctl)) {
-                break;
-            }
-            linux_ioctl_close_handle(dev_ioctl);
-        }
-        
-        if (dev_ioctl->fd < 0) {
-            linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Failed to open any CD-ROM device\n");
-            free(dev_ioctl);
-            return NULL;
-        }
+    strncpy(dev_ioctl->path, drv, sizeof(dev_ioctl->path) - 1);
+    dev_ioctl->path[sizeof(dev_ioctl->path) - 1] = '\0';
+
+    if (!linux_ioctl_open_handle(dev_ioctl)) {
+        free(dev_ioctl);
+        return NULL;
     }
-    
-    if (dev_ioctl->fd < 0) {
-        if (!linux_ioctl_open_handle(dev_ioctl)) {
-            free(dev_ioctl);
-            return NULL;
-        }
-    }
-    
+
     /* Set up the device operations */
-    dev->ops = &linux_ioctl_ops;
+    dev->ops   = &linux_ioctl_ops;
     dev->local = dev_ioctl;
-    
-    /* Read initial TOC */
-    linux_ioctl_read_raw_toc(dev_ioctl);
-    
+
+    linux_ioctl_load(dev_ioctl);
+
     /* Validate device state before completing initialization */
     if (dev_ioctl->blocks_num <= 0) {
         linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: No TOC entries, aborting\n");
@@ -905,18 +774,9 @@ ioctl_open(cdrom_t *dev, const char *drv)
         free(dev_ioctl);
         return NULL;
     }
-    
-    if (dev_ioctl->first_track < 1 || dev_ioctl->last_track > 99 || 
-        dev_ioctl->first_track > dev_ioctl->last_track) {
-        linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: Invalid track range %d-%d, aborting\n",
-                       dev_ioctl->first_track, dev_ioctl->last_track);
-        linux_ioctl_close_handle(dev_ioctl);
-        free(dev_ioctl);
-        return NULL;
-    }
-    
-    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: CD-ROM opened successfully on %s\n", 
-                   dev_ioctl->path);
-    
+
+    linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: CD-ROM opened successfully on %s\n",
+                    dev_ioctl->path);
+
     return dev_ioctl;
 }
