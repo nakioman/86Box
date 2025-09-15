@@ -230,8 +230,8 @@ linux_ioctl_read_raw_toc(linux_ioctl_t *dev_ioctl)
     header               = (toc_header_t *) data_buffer;
     uint16_t data_length = be16_to_cpu(header->data_length);
 
-    printf("TOC Data Length: %d bytes\n", data_length);
-    printf("Sessions: %d to %d\n", header->first_session, header->last_session);
+    linux_ioctl_log("TOC Data Length: %d bytes\n", data_length);
+    linux_ioctl_log("Sessions: %d to %d\n", header->first_session, header->last_session);
 
     // Calculate number of descriptors
     if (data_length < sizeof(toc_header_t)) {
@@ -351,7 +351,7 @@ linux_ioctl_get_track_index(const linux_ioctl_t *dev_ioctl, const uint32_t secto
     linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: ioctl_get_track_index(%u) found index %d (start=%u)\n",
                     sector, best_track, best_start);
 
-    prev_sector           = sector;
+    prev_sector    = sector;
     prev_track_idx = best_track;
     return best_track;
 }
@@ -462,14 +462,14 @@ linux_ioctl_get_last_block(const void *local)
 static int
 linux_ioctl_read_sector(const void *local, uint8_t *buffer, const uint32_t sector)
 {
-    const linux_ioctl_t    *dev_ioctl         = (const linux_ioctl_t *) local;
-    const int               sc_offs           = (sector == 0xffffffff) ? 0 : 2352;
-    int                     len               = (sector == 0xffffffff) ? 16 : 2368;
-    uint32_t                lba               = sector;
-    int                     track             = -1;
-    int                     toc_index         = -1;
-    int                     ret               = 0;
-    int                     bytes_transferred = 0;
+    const linux_ioctl_t *dev_ioctl         = (const linux_ioctl_t *) local;
+    const int            sc_offs           = (sector == 0xffffffff) ? 0 : 2352;
+    int                  len               = (sector == 0xffffffff) ? 16 : 2368;
+    uint32_t             lba               = sector;
+    int                  track             = -1;
+    int                  toc_index         = -1;
+    int                  ret               = 0;
+    int                  bytes_transferred = 0;
 
     linux_ioctl_log(dev_ioctl->log, "Linux IOCTL: read_sector() called for sector %u\n", sector);
 
@@ -716,9 +716,7 @@ linux_ioctl_load(const void *local)
 
     linux_ioctl_set_max_speed(dev_ioctl);
 
-    /* Re-read TOC on load */
-    if (dev_ioctl->blocks_num <= 0)
-        linux_ioctl_read_raw_toc(dev_ioctl);
+    linux_ioctl_read_raw_toc(dev_ioctl);
 }
 
 static const cdrom_ops_t linux_ioctl_ops = {
