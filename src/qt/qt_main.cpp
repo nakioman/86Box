@@ -73,6 +73,10 @@ extern "C" {
 #    include <windows.h>
 #endif
 
+#ifdef Q_OS_LINUX
+#    include "qt_linuxcdromnotify.hpp"
+#endif
+
 #include <thread>
 #include <iostream>
 #include <memory>
@@ -820,6 +824,15 @@ main(int argc, char *argv[])
     if (rawInputFilter) {
         app.installNativeEventFilter(rawInputFilter.get());
         main_window->setSendKeyboardInput(false);
+    }
+#endif
+
+#ifdef Q_OS_LINUX
+    /* Setup Linux CD-ROM change notification */
+    auto linuxCDROMNotify = LinuxCDROMNotify::Register(main_window);
+    if (linuxCDROMNotify) {
+        // The notifier is self-contained and doesn't need to be installed as a filter
+        // It uses Qt's event system internally
     }
 #endif
 

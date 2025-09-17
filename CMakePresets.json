@@ -130,8 +130,19 @@
                 "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}"
             },
             "inherits": "regular"
+        },
+        {
+            "name": "Linux ARM 64 - Debug - QT6",
+            "description": "",
+            "displayName": "",
+            "inherits": [
+                "flags-gcc-aarch64-debug"
+            ],
+            "cacheVariables": {
+                "USE_QT6": "ON",
+                "USE_IOCTL": "ON"
+            }
         }
     ],
-    "buildPresets": [],
     "testPresets": []
 }
