@@ -38,6 +38,7 @@
 #include <86box/fdd_pcjs.h>
 #include <86box/fdd_mfm.h>
 #include <86box/fdd_td0.h>
+#include <86box/fdd_drawbridge.h>
 #include <86box/fdc.h>
 #include <86box/fdd_buzzer.h>
 
@@ -138,6 +139,7 @@ static const struct
     { "TD0",  td0_load,  td0_close,  -1},
     { "VFD",  img_load,  img_close,  -1},
     { "XDF",  img_load,  img_close,  -1},
+    { "DRAWBRIDGE", drawbridge_load, drawbridge_close, -1},
     { 0,      0,         0,          0 }
 };
 
@@ -464,11 +466,12 @@ fdd_get_densel(int drive)
 void
 fdd_load(int drive, char *fn)
 {
-    int         c = 0;
+   int         c = 0;
     int         size;
     const char *p;
     FILE       *fp;
     int         offs = 0;
+    int         is_usb_device = 0;
 
     fdd_log("FDD: loading drive %d with '%s'\n", drive, fn);
 
@@ -479,32 +482,63 @@ fdd_load(int drive, char *fn)
         ui_writeprot[drive] = 1;
     }
     fn += offs;
-    p = path_get_extension(fn);
-    if (!p)
-        return;
-    fp = plat_fopen(fn, "rb");
-    if (fp) {
+    
+    /* Check if this is a COM floppy device path */
+    if (strstr(fn, "/dev/tty") == fn) {
+        /* This is a device path, treat it as COM floppy */
+        fdd_log("FDD: Detected COM floppy device path: %s\n", fn);
+        is_usb_device = 1;
+    } else {
+        p = path_get_extension(fn);
+        if (!p)
+            return;
+        fp = plat_fopen(fn, "rb");
+        if (!fp) {
+            fdd_log("FDD: could not open '%s'\n", fn);
+            drive_empty[drive] = 1;
+            fdd_set_head(drive, 0);
+            memset(floppyfns[drive], 0, sizeof(floppyfns[drive]));
+            ui_sb_update_icon_state(SB_FLOPPY | drive, 1);
+            return;
+        }
         if (fseek(fp, -1, SEEK_END) == -1)
             fatal("fdd_load(): Error seeking to the end of the file\n");
         size = ftell(fp) + 1;
         fclose(fp);
-        while (loaders[c].ext) {
-            if (!strcasecmp(p, (char *) loaders[c].ext) && (size == loaders[c].size || loaders[c].size == -1)) {
-                driveloaders[drive] = c;
-                if (floppyfns[drive] != (fn - offs))
-                    strcpy(floppyfns[drive], fn - offs);
-                d86f_setup(drive);
-                loaders[c].load(drive, floppyfns[drive] + offs);
-                drive_empty[drive] = 0;
-                fdd_forced_seek(drive, 0);
-                fdd_changed[drive] = 1;
-                ui_sb_update_icon_wp(SB_FLOPPY | drive, ui_writeprot[drive]);
-                return;
-            }
-            c++;
-        }
     }
-    fdd_log("FDD: could not load '%s' %s\n", fn, p);
+    
+    /* Find the appropriate loader */
+    while (loaders[c].ext) {
+        int match = 0;
+        
+        if (is_usb_device) {
+            match = !strcasecmp("DRAWBRIDGE", (char *) loaders[c].ext);
+        } else {
+            match = !strcasecmp(p, (char *) loaders[c].ext) && 
+                    (size == loaders[c].size || loaders[c].size == -1);
+        }
+        
+        if (match) {
+            driveloaders[drive] = c;
+            if (floppyfns[drive] != (fn - offs))
+                strcpy(floppyfns[drive], fn - offs);
+            d86f_setup(drive);
+            loaders[c].load(drive, floppyfns[drive] + offs);
+            drive_empty[drive] = 0;
+            fdd_forced_seek(drive, 0);
+            fdd_changed[drive] = 1;
+            ui_sb_update_icon_wp(SB_FLOPPY | drive, ui_writeprot[drive]);
+            return;
+        }
+        c++;
+    }
+    
+    /* No suitable loader found */
+    if (is_usb_device) {
+        fdd_log("FDD: USB loader not found\n");
+    } else {
+        fdd_log("FDD: could not load '%s' %s\n", fn, p);
+    }
     drive_empty[drive] = 1;
     fdd_set_head(drive, 0);
     memset(floppyfns[drive], 0, sizeof(floppyfns[drive]));
@@ -697,6 +731,7 @@ fdd_init(void)
     td0_init();
     imd_init();
     pcjs_init();
+    drawbridge_init();
 
     for (i = 0; i < FDD_NUM; i++) {
         fdd_load(i, floppyfns[i]);

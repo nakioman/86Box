@@ -32,6 +32,8 @@ add_library(fdd OBJECT
     fdd_mfm.c
     fdd_td0.c
     fdd_buzzer.c
+    fdd_drawbridge.c
+    drawbridge.c
 )
 
 add_subdirectory(lzw)
