@@ -26,7 +26,6 @@
 #include <sys/stat.h>
 #include <errno.h>
 #define HAVE_STDARG_H
-#define ENABLE_DRAWBRIDGE_LOG 1
 #include <86box/86box.h>
 #include <86box/timer.h>
 #include <86box/crc.h>
@@ -52,10 +51,9 @@ typedef struct drawbridge_t {
     uint8_t           gap3_size;     /* Gap3 size for d86f */
     uint8_t           data_rate;     /* Data rate index */
     /* Track caching for performance */
-    uint8_t track_data[RAW_TRACKDATA_LENGTH_HD]; /* Raw MFM track data */
-    bool    track_data_valid;                    /* Whether cached track data is valid */
-    int     cached_track;                        /* Track number of cached data */
-    int     cached_side;                         /* Side of cached data */
+    uint8_t track_data[2][RAW_TRACKDATA_LENGTH_HD]; /* Raw MFM track data for both sides */
+    bool    track_data_valid[2];                    /* Whether cached track data is valid for each side */
+    int     cached_track;                           /* Track number of cached data */
     /* Sector tracking for read_data callback */
     uint8_t current_sector_track;     /* Track of currently selected sector */
     uint8_t current_sector_head;      /* Head of currently selected sector */
@@ -104,7 +102,7 @@ wordSwap(uint16_t w)
 
 // CRC16 with custom initial value
 static uint16_t
-crc16_continue(const char *pData, uint32_t length, uint16_t wCrc)
+crc16(const char *pData, uint32_t length, uint16_t wCrc)
 {
     uint8_t i;
     while (length--) {
@@ -114,36 +112,6 @@ crc16_continue(const char *pData, uint32_t length, uint16_t wCrc)
     }
     return wCrc & 0xffff;
 }
-
-// CRC16 with default initial value
-static uint16_t
-crc16(const char *pData, uint32_t length)
-{
-    return crc16_continue(pData, length, 0xFFFF);
-}
-
-// Helper functions for RawDecodedSector management
-typedef struct {
-    uint8_t *data;
-    uint32_t size;
-    uint32_t capacity;
-} RawDecodedSector;
-
-typedef struct {
-    RawDecodedSector data;
-    uint32_t         numErrors; // number of errors in this sector. 0 means PERFECT!
-} DecodedSector;
-
-typedef struct SectorMapEntry {
-    int                    sectorNumber;
-    DecodedSector          sector;
-    struct SectorMapEntry *next;
-} SectorMapEntry;
-
-typedef struct {
-    SectorMapEntry *sectors; // linked list of sectors
-    uint32_t        sectorsWithErrors;
-} DecodedTrack;
 
 static void
 init_raw_decoded_sector(RawDecodedSector *sector)
@@ -221,43 +189,6 @@ free_decoded_track(DecodedTrack *track)
     track->sectors           = NULL;
     track->sectorsWithErrors = 0;
 }
-
-#define IBM_DD_SECTORS 9
-#define IBM_HD_SECTORS 18
-
-// IAM A1A1A1FC
-#define MFM_SYNC_TRACK_HEADER 0x5224522452245552ULL
-// IDAM A1A1A1FE
-#define MFM_SYNC_SECTOR_HEADER 0x4489448944895554ULL
-// DAM A1A1A1FB (data address mark)
-#define MFM_SYNC_SECTOR_DATA 0x4489448944895545ULL
-// DDAM A1A1A1F8 (deleted data address mark)
-#define MFM_SYNC_DELETED_SECTOR_DATA 0x448944894489554AULL
-
-// IAM Header data structure
-typedef struct __attribute__((packed)) {
-    unsigned char addressMark[4]; // should be 0xA1A1A1FE
-    unsigned char cylinder;
-    unsigned char head;
-    unsigned char sector;
-    unsigned char length; // 2^(length+7) sector size = should be 2 for 512
-    unsigned char crc[2];
-} IBMSectorHeader;
-
-// IDAM data
-typedef struct {
-    unsigned char  dataMark[4]; // should be 0xA1A1A1FB
-    unsigned char *data;        // *should* be 512 but doesn't have to be
-    uint32_t       dataSize;    // size of the data array
-    unsigned char  crc[2];
-} IBMSectorData;
-
-typedef struct {
-    IBMSectorHeader header;
-    IBMSectorData   data;
-    uint32_t        headerErrors; // number of errors in the header. 0 means PERFECT!
-    bool            dataValid;
-} IBMSector;
 
 // Extract the data, properly aligned into the output
 static void
@@ -340,40 +271,29 @@ findSectors_IBM(const uint8_t *track, const uint32_t dataLengthInBits, const boo
             }
 
             extractMFMDecodeRaw(track, dataLengthInBits, bit + 1 - 64, sizeof(sector.header), (uint8_t *) &sector.header);
-            uint16_t crc        = crc16((char *) &sector.header, sizeof(sector.header) - 2);
+            uint16_t crc        = crc16((char *) &sector.header, sizeof(sector.header) - 2, 0xFFFF);
             sector.headerErrors = 0;
             headerFound         = true;
-
-            // Debug: Print header information (reduced output)
-            if (sector.headerErrors > 0) {
-                //         drawbridge_fdd_log("DrawBridge: Header Cyl:%d Head:%d Sec:%d errors:%d\n",
-                //                sector.header.cylinder, sector.header.head, sector.header.sector, sector.headerErrors);
-            }
 
             if (sector.header.sector < 1) {
                 sector.header.sector = 1;
                 sector.headerErrors++;
-                //         drawbridge_fdd_log("DrawBridge: Fixed sector number < 1\n");
+                drawbridge_fdd_log("DrawBridge: Fixed sector number < 1\n");
             }
 
             if (crc != wordSwap(*(uint16_t *) sector.header.crc)) {
                 sector.headerErrors++;
-                //          drawbridge_fdd_log("DrawBridge: Header CRC mismatch\n");
+                drawbridge_fdd_log("DrawBridge: Header CRC mismatch\n");
             }
             if (!sector.headerErrors)
                 sectorSize = sector.header.length;
             if (sector.header.cylinder != cylinder) {
                 sector.headerErrors++;
-                //           drawbridge_fdd_log("DrawBridge: Cylinder mismatch (ignored): expected %d, got %d\n", cylinder, sector.header.cylinder);
             }
             if (sector.header.head != (upperSide ? 1 : 0)) {
                 sector.headerErrors++;
-                //         drawbridge_fdd_log("DrawBridge: Head mismatch: expected %d, got %d\n", upperSide ? 1 : 0, sector.header.head);
+                drawbridge_fdd_log("DrawBridge: Head mismatch: expected %d, got %d\n", upperSide ? 1 : 0, sector.header.head);
             }
-
-            // drawbridge_fdd_log("DrawBridge: Found sector header: Cyl=%d Head=%d Sec=%d Size=%d Errors=%d\n",
-            //                    sector.header.cylinder, sector.header.head, sector.header.sector,
-            //                    sector.header.length, sector.headerErrors);
 
             lastSectorNumber = sector.header.sector;
         } else if (decoded == MFM_SYNC_SECTOR_DATA) {
@@ -404,17 +324,14 @@ findSectors_IBM(const uint8_t *track, const uint32_t dataLengthInBits, const boo
                 bitStart += sectorDataSize * 8 * 2;
                 extractMFMDecodeRaw(track, dataLengthInBits, bitStart, 2, (uint8_t *) &sector.data.crc);
                 // Validate
-                uint16_t crc     = crc16((char *) &sector.data.dataMark, 4);
-                crc              = crc16_continue((char *) sector.data.data, sector.data.dataSize, crc);
+                uint16_t crc     = crc16((char *) &sector.data.dataMark, 4, 0xFFFF);
+                crc              = crc16((char *) sector.data.data, sector.data.dataSize, crc);
                 sector.dataValid = crc == wordSwap(*(uint16_t *) sector.data.crc);
 
                 // Debug: Print data validation info only for errors
                 if (!sector.dataValid) {
                     drawbridge_fdd_log("DrawBridge: Data CRC FAIL calc:0x%04X stored:0x%04X\n",
                                        crc, wordSwap(*(uint16_t *) sector.data.crc));
-                } else {
-                    //     drawbridge_fdd_log("DrawBridge: Successfully decoded sector %d data (%d bytes)\n",
-                    //                        sector.header.sector, sector.data.dataSize);
                 }
 
                 // Standardize the sector
@@ -653,7 +570,8 @@ read_sector_from_device(int drive, int track, int head, int sector, uint8_t *buf
         }
         dev->track = track;
         /* Invalidate track cache when changing tracks */
-        dev->track_data_valid = false;
+        dev->track_data_valid[0] = false;
+        dev->track_data_valid[1] = false;
     }
 
     /* Select the head/side */
@@ -665,16 +583,16 @@ read_sector_from_device(int drive, int track, int head, int sector, uint8_t *buf
     }
 
     /* Read track data if not cached or cache is invalid */
-    if (!dev->track_data_valid || dev->cached_track != track || dev->cached_side != head) {
-        drawbridge_fdd_log("DrawBridge: Cache miss - reading track %d head %d (cached: track=%d head=%d valid=%s)\n",
-                           track, head, dev->cached_track, dev->cached_side, dev->track_data_valid ? "true" : "false");
+    if (!dev->track_data_valid[head] || dev->cached_track != track) {
+        drawbridge_fdd_log("DrawBridge: Cache miss - reading track %d head %d (cached: track=%d valid[%d]=%s)\n",
+                           track, head, dev->cached_track, head, dev->track_data_valid[head] ? "true" : "false");
         int data_length = dev->is_hd ? RAW_TRACKDATA_LENGTH_HD : RAW_TRACKDATA_LENGTH_DD;
 
         /* Try reading the track data, with retry and calibration if needed */
         int       retry_count = 0;
         const int max_retries = 3;
         while (retry_count < max_retries) {
-            response = arduino_interface_read_current_track(dev->arduino, dev->track_data, data_length, true);
+            response = arduino_interface_read_current_track(dev->arduino, dev->track_data[head], data_length, true);
             if (response == DIAGNOSTIC_RESPONSE_OK) {
                 break; /* Success! */
             }
@@ -699,15 +617,14 @@ read_sector_from_device(int drive, int track, int head, int sector, uint8_t *buf
             return;
         }
 
-        /* Mark cache as valid */
-        dev->track_data_valid = true;
-        dev->cached_track     = track;
-        dev->cached_side      = head;
+        /* Mark cache as valid for this side */
+        dev->track_data_valid[head] = true;
+        dev->cached_track           = track;
 
         drawbridge_fdd_log("DrawBridge: Successfully cached track %d head %d data\n", track, head);
 
     } else {
-        drawbridge_fdd_log("DrawBridge: Using cached track %d head %d data\n", dev->cached_track, dev->cached_side);
+        drawbridge_fdd_log("DrawBridge: Using cached track %d head %d data\n", dev->cached_track, head);
     }
 
     /* Use IBM MFM decoder to extract the sector */
@@ -721,7 +638,7 @@ read_sector_from_device(int drive, int track, int head, int sector, uint8_t *buf
     bool nonstandard_timings = false;
 
     /* Decode the entire track using IBM MFM decoder */
-    findSectors_IBM(dev->track_data,
+    findSectors_IBM(dev->track_data[head],
                     (dev->is_hd ? RAW_TRACKDATA_LENGTH_HD : RAW_TRACKDATA_LENGTH_DD) * 8, /* convert bytes to bits */
                     dev->is_hd,
                     track, /* cylinder */
@@ -804,6 +721,10 @@ drawbridge_fdd_seek(int drive, int track)
     d86f_destroy_linked_lists(drive, 1);
     d86f_zero_track(drive);
 
+    if (dev->track != track){
+        arduino_interface_enable_reading(dev->arduino, true, false, false);
+    }
+
     /* Build track data for both sides */
     for (int side = 0; side < dev->heads; side++) {
         int current_pos = d86f_prepare_pretrack(drive, side, 0);
@@ -830,6 +751,7 @@ drawbridge_fdd_seek(int drive, int track)
         }
     }
 
+    arduino_interface_enable_reading(dev->arduino, false, false, false);
     drawbridge_fdd_log("DrawBridge: Completed seek to track %d\n", track);
 }
 
@@ -910,6 +832,7 @@ drawbridge_fdd_side_flags(int drive)
 static void
 drawbridge_fdd_set_sector(int drive, int side, uint8_t c, uint8_t h, uint8_t r, uint8_t n)
 {
+    drawbridge_fdd_log("DrawBridge: set_sector drive=%d, side=%d, C=%d H=%d R=%d N=%d\n", drive, side, c, h, r, n);
     drawbridge_t *dev = drawbridge_fdd[drive];
 
     if (!dev)
@@ -939,6 +862,7 @@ drawbridge_fdd_set_sector(int drive, int side, uint8_t c, uint8_t h, uint8_t r, 
 static uint8_t
 drawbridge_fdd_poll_read_data(int drive, int side, uint16_t pos)
 {
+    drawbridge_fdd_log("DrawBridge: read_data drive=%d, side=%d, pos=%d\n", drive, side, pos);
     drawbridge_t *dev = drawbridge_fdd[drive];
 
     if (!dev || !dev->current_sector_valid || pos >= 512) {
@@ -1028,11 +952,6 @@ drawbridge_load(int drive, char *fn)
 
     drawbridge_fdd_log("DrawBridge: Successfully opened Arduino port %s\n", fn);
 
-    /* Get firmware version */
-    FirmwareVersion version = arduino_interface_get_firmware_version(dev->arduino);
-    drawbridge_fdd_log("DrawBridge: Firmware version %d.%d.%d\n",
-                       version.major, version.minor, version.buildNumber);
-
     /* Enable reading mode */
     response = arduino_interface_enable_reading(dev->arduino, true, true, false);
     if (response != DIAGNOSTIC_RESPONSE_OK) {
@@ -1047,13 +966,13 @@ drawbridge_load(int drive, char *fn)
     /* Initialize device state */
     dev->disk_inserted        = false;
     dev->is_hd                = false;
-    dev->track_data_valid     = false;
+    dev->track_data_valid[0]  = false;
+    dev->track_data_valid[1]  = false;
     dev->current_sector_valid = 0;
     dev->current_sector_track = 0xFF; /* Invalid track to force initial read */
     dev->current_sector_head  = 0xFF;
     dev->current_sector_r     = 0xFF;
     dev->cached_track         = -1;
-    dev->cached_side          = -1;
     dev->track                = -1;
 
     /* Detect floppy geometry from Arduino */

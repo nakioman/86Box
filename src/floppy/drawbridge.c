@@ -1,6 +1,5 @@
 // For usleep function
 #define _DEFAULT_SOURCE
-#define ENABLE_DRAWBRIDGE_LOG 1
 #define HAVE_STDARG_H
 
 #include <86box/drawbridge.h>
