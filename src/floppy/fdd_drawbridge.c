@@ -872,35 +872,6 @@ drawbridge_fdd_poll_read_data(int drive, int side, uint16_t pos)
     return dev->current_sector_data[pos];
 }
 
-/* Write data callback */
-static void
-drawbridge_fdd_poll_write_data(int drive, int side, uint16_t pos, uint8_t data)
-{
-    /* DrawBridge is read-only */
-    if (writeprot[drive])
-        return;
-}
-
-/* Writeback function - ensure any pending writes are synced */
-static void
-drawbridge_fdd_writeback(int drive)
-{
-    drawbridge_t *dev = drawbridge_fdd[drive];
-
-    if (!dev || writeprot[drive])
-        return;
-
-    /* DrawBridge is read-only, no writeback needed */
-}
-
-/* Format conditions check */
-static int
-drawbridge_fdd_format_conditions(int drive)
-{
-    /* DrawBridge is read-only */
-    return 0;
-}
-
 /* Initialize DrawBridge floppy support */
 void
 drawbridge_init(void)
@@ -918,7 +889,7 @@ drawbridge_load(int drive, char *fn)
     drawbridge_fdd_log("DrawBridge: Loading DrawBridge device %d from '%s'\n", drive, fn);
 
     d86f_unregister(drive);
-    writeprot[drive] = 1; /* DrawBridge is read-only */
+    fwriteprot[drive] = writeprot[drive] = 1; /* DrawBridge is read-only */
 
     /* Allocate device structure */
     dev = (drawbridge_t *) calloc(1, sizeof(drawbridge_t));
@@ -985,10 +956,6 @@ drawbridge_load(int drive, char *fn)
         return;
     }
 
-    if (ui_writeprot[drive])
-        writeprot[drive] = 1;
-    fwriteprot[drive] = writeprot[drive];
-
     /* Set up the device */
     drawbridge_fdd[drive] = dev;
 
@@ -999,11 +966,11 @@ drawbridge_load(int drive, char *fn)
     /* Attach to D86F engine */
     d86f_handler[drive].disk_flags        = drawbridge_fdd_disk_flags;
     d86f_handler[drive].side_flags        = drawbridge_fdd_side_flags;
-    d86f_handler[drive].writeback         = drawbridge_fdd_writeback;
+    d86f_handler[drive].writeback         = null_writeback; /* Read-only device */
     d86f_handler[drive].set_sector        = drawbridge_fdd_set_sector;
     d86f_handler[drive].read_data         = drawbridge_fdd_poll_read_data;
-    d86f_handler[drive].write_data        = drawbridge_fdd_poll_write_data;
-    d86f_handler[drive].format_conditions = drawbridge_fdd_format_conditions;
+    d86f_handler[drive].write_data        = null_write_data; /* Read-only device */
+    d86f_handler[drive].format_conditions = null_format_conditions;
     d86f_handler[drive].extra_bit_cells   = null_extra_bit_cells;
     d86f_handler[drive].encoded_data      = common_encoded_data;
     d86f_handler[drive].read_revolution   = common_read_revolution;
@@ -1034,9 +1001,6 @@ drawbridge_close(int drive)
 
     /* Clean up d86f engine and unregister handlers */
     d86f_destroy(drive);
-
-    /* Write back any changes before closing (none for read-only device) */
-    drawbridge_fdd_writeback(drive);
 
     /* Close Arduino interface */
     if (dev->arduino) {
