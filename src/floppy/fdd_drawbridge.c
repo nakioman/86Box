@@ -1010,7 +1010,9 @@ drawbridge_load(int drive, char *fn)
     d86f_handler[drive].index_hole_pos    = null_index_hole_pos;
     d86f_handler[drive].get_raw_size      = common_get_raw_size;
     d86f_handler[drive].check_crc         = 1; /* Enable CRC checking to match other formats */
+    
     d86f_set_version(drive, 0x0063);
+    fdd_set_turbo(drive, 1); /* Enable turbo mode for DrawBridge */
 
     drives[drive].seek = drawbridge_fdd_seek;
 
