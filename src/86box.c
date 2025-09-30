@@ -1381,7 +1381,6 @@ pc_init_modules(void)
     video_init();
 
     fdd_init();
-    fdd_buzzer_init();
 
     sound_init();
 

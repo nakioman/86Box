@@ -168,7 +168,7 @@ static const struct {
     /* 3.5" HD, Equivalent to TEAC FD-235HF */
     { 86, FLAG_RPM_300 | FLAG_DS | FLAG_HOLE0 | FLAG_HOLE1 | FLAG_DOUBLE_STEP | FLAG_PS2, "3.5\" 1.44M", "35_2hd" },
     /* TODO: 3.5" DD, Equivalent to TEAC FD-235GF */
-//    { 86, FLAG_RPM_300 | FLAG_RPM_360 | FLAG_DS | FLAG_HOLE0 | FLAG_HOLE1 | FLAG_DOUBLE_STEP, "3.5\" 1.25M", "35_2hd_2mode" },
+    //    { 86, FLAG_RPM_300 | FLAG_RPM_360 | FLAG_DS | FLAG_HOLE0 | FLAG_HOLE1 | FLAG_DOUBLE_STEP, "3.5\" 1.25M", "35_2hd_2mode" },
     /* 3.5" HD PC-98 */
     { 86, FLAG_RPM_300 | FLAG_RPM_360 | FLAG_DS | FLAG_HOLE0 | FLAG_HOLE1 | FLAG_DOUBLE_STEP | FLAG_INVERT_DENSEL, "3.5\" 1.25M PC-98", "35_2hd_nec" },
     /* 3.5" HD 3-Mode, Equivalent to TEAC FD-235HG */
@@ -245,7 +245,7 @@ fdd_forced_seek(int drive, int track_diff)
         fdd[drive].track = drive_types[fdd[drive].type].max_track;
 
     if (track_diff > 0 && fdd[drive].track <= drive_types[fdd[drive].type].max_track)
-         fdd_buzzer_seek(track_diff);
+        fdd_buzzer_seek(track_diff);
 
     fdd_do_seek(drive, fdd[drive].track);
 }
@@ -266,8 +266,8 @@ fdd_seek(int drive, int track_diff)
 
     fdd_changed[drive] = 0;
 
-     if (track_diff > 0 && fdd[drive].track <= drive_types[fdd[drive].type].max_track)
-         fdd_buzzer_seek(track_diff);
+    if (track_diff > 0 && fdd[drive].track <= drive_types[fdd[drive].type].max_track)
+        fdd_buzzer_seek(track_diff);
 
     fdd_do_seek(drive, fdd[drive].track);
 }
@@ -466,7 +466,7 @@ fdd_get_densel(int drive)
 void
 fdd_load(int drive, char *fn)
 {
-   int         c = 0;
+    int         c = 0;
     int         size;
     const char *p;
     FILE       *fp;
@@ -482,12 +482,13 @@ fdd_load(int drive, char *fn)
         ui_writeprot[drive] = 1;
     }
     fn += offs;
-    
+
     /* Check if this is a COM floppy device path */
     if (strstr(fn, "/dev/tty") == fn) {
         /* This is a device path, treat it as COM floppy */
         fdd_log("FDD: Detected COM floppy device path: %s\n", fn);
         is_usb_device = 1;
+        fdd_buzzer_cleanup();
     } else {
         p = path_get_extension(fn);
         if (!p)
@@ -505,19 +506,20 @@ fdd_load(int drive, char *fn)
             fatal("fdd_load(): Error seeking to the end of the file\n");
         size = ftell(fp) + 1;
         fclose(fp);
+        fdd_buzzer_init();
     }
-    
+
     /* Find the appropriate loader */
     while (loaders[c].ext) {
         int match = 0;
-        
+
         if (is_usb_device) {
             match = !strcasecmp("DRAWBRIDGE", (char *) loaders[c].ext);
         } else {
             match = !strcasecmp(p, (char *) loaders[c].ext) && 
                     (size == loaders[c].size || loaders[c].size == -1);
         }
-        
+
         if (match) {
             driveloaders[drive] = c;
             if (floppyfns[drive] != (fn - offs))
@@ -532,7 +534,7 @@ fdd_load(int drive, char *fn)
         }
         c++;
     }
-    
+
     /* No suitable loader found */
     if (is_usb_device) {
         fdd_log("FDD: USB loader not found\n");
