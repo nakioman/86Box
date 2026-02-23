@@ -104,8 +104,6 @@ prof_dirty_page_record(uint32_t phys_addr)
 void
 prof_dynarec_print_reset(void)
 {
-    uint32_t total_blocks = prof_dyn_jit_blocks + prof_dyn_recomp_blocks
-                          + prof_dyn_interp_blocks + prof_dyn_firstpass_blocks;
     uint32_t total_dirty  = prof_dyn_dirty_flushes + prof_dyn_dirty_flushes2;
 
     fprintf(stderr, "--- Dynamic Recompiler ---\n");
