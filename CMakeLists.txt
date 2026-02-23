@@ -133,6 +133,7 @@ option(FLUIDSYNTH   "FluidSynth"                                                
 option(MUNT         "MUNT"                                                       ON)
 option(VNC          "VNC renderer"                                               OFF)
 option(MINITRACE    "Enable Chrome tracing using the modified minitrace library" OFF)
+option(SUBSYS_PROFILE "Enable per-subsystem profiling (prints timer callback breakdown)" OFF)
 option(GDBSTUB      "Enable GDB stub server for debugging"                       OFF)
 option(DEV_BRANCH   "Development branch"                                         OFF)
 option(DISCORD      "Discord Rich Presence support"                              ON)

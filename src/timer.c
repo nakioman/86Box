@@ -1,3 +1,8 @@
+#ifdef SUBSYS_PROFILE
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#endif
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -6,6 +11,103 @@
 #include "cpu.h"
 #include <86box/timer.h>
 #include <86box/nv/vid_nv_rivatimer.h>
+
+#ifdef SUBSYS_PROFILE
+#include <time.h>
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
+
+static inline uint64_t
+prof_now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t) ts.tv_sec * 1000000000ULL + (uint64_t) ts.tv_nsec;
+}
+
+#define PROF_MAX_CBS 64
+
+typedef struct {
+    void    (*callback)(void *);
+    uint64_t total_ns;
+    uint32_t call_count;
+} prof_cb_entry_t;
+
+static prof_cb_entry_t prof_cb_entries[PROF_MAX_CBS];
+static int             prof_cb_count = 0;
+uint64_t               prof_timer_total_ns = 0;
+
+static prof_cb_entry_t *
+prof_cb_find(void (*cb)(void *))
+{
+    for (int i = 0; i < prof_cb_count; i++) {
+        if (prof_cb_entries[i].callback == cb)
+            return &prof_cb_entries[i];
+    }
+    if (prof_cb_count < PROF_MAX_CBS) {
+        prof_cb_entry_t *e = &prof_cb_entries[prof_cb_count++];
+        e->callback  = cb;
+        e->total_ns  = 0;
+        e->call_count = 0;
+        return e;
+    }
+    return NULL;
+}
+
+void
+prof_timer_print_reset(void)
+{
+    if (!prof_cb_count)
+        return;
+
+    /* Sort descending by total_ns. */
+    for (int i = 0; i < prof_cb_count - 1; i++) {
+        for (int j = i + 1; j < prof_cb_count; j++) {
+            if (prof_cb_entries[j].total_ns > prof_cb_entries[i].total_ns) {
+                prof_cb_entry_t tmp = prof_cb_entries[i];
+                prof_cb_entries[i]  = prof_cb_entries[j];
+                prof_cb_entries[j]  = tmp;
+            }
+        }
+    }
+
+    fprintf(stderr, "--- Device Callback Breakdown (top 15 by time) ---\n");
+
+    for (int i = 0; i < prof_cb_count && i < 15; i++) {
+        if (prof_cb_entries[i].call_count == 0)
+            continue;
+
+        const char *name = NULL;
+#ifndef _WIN32
+        Dl_info info;
+        if (dladdr((void *) (uintptr_t) prof_cb_entries[i].callback, &info) && info.dli_sname)
+            name = info.dli_sname;
+#endif
+        char addr_buf[32];
+        if (!name) {
+            snprintf(addr_buf, sizeof(addr_buf), "%p",
+                     (void *) (uintptr_t) prof_cb_entries[i].callback);
+            name = addr_buf;
+        }
+
+        fprintf(stderr, "  %-35s %8.2f ms  (%6u calls, %6.1f us/call)\n",
+                name,
+                prof_cb_entries[i].total_ns / 1e6,
+                prof_cb_entries[i].call_count,
+                prof_cb_entries[i].call_count > 0
+                    ? prof_cb_entries[i].total_ns / 1e3 / prof_cb_entries[i].call_count
+                    : 0.0);
+    }
+
+    /* Reset. */
+    for (int i = 0; i < prof_cb_count; i++) {
+        prof_cb_entries[i].total_ns  = 0;
+        prof_cb_entries[i].call_count = 0;
+    }
+    prof_timer_total_ns = 0;
+}
+#endif /* SUBSYS_PROFILE */
 
 uint64_t TIMER_USEC;
 uint64_t timer_target;
@@ -136,9 +238,23 @@ timer_process(void)
                have a NULL callback when no operation
                is needed.
              */
+#ifdef SUBSYS_PROFILE
+            uint64_t prof_t0 = prof_now_ns();
+#endif
             timer->in_callback = 1;
             timer->callback(timer->priv);
             timer->in_callback = 0;
+#ifdef SUBSYS_PROFILE
+            {
+                uint64_t         prof_dt = prof_now_ns() - prof_t0;
+                prof_cb_entry_t *e       = prof_cb_find(timer->callback);
+                if (e) {
+                    e->total_ns += prof_dt;
+                    e->call_count++;
+                }
+                prof_timer_total_ns += prof_dt;
+            }
+#endif
         }
 
         num++;

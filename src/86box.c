@@ -334,6 +334,23 @@ extern int writelnum;
 int fps;
 int framecount;
 
+#ifdef SUBSYS_PROFILE
+#include <time.h>
+static inline uint64_t
+prof_now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t) ts.tv_sec * 1000000000ULL + (uint64_t) ts.tv_nsec;
+}
+static uint64_t prof_frame_acc     = 0;
+static uint64_t prof_cpu_exec_acc  = 0;
+static uint64_t prof_blit_lock_acc = 0;
+extern uint64_t prof_timer_total_ns;
+extern void     prof_timer_print_reset(void);
+extern void     prof_dynarec_print_reset(void);
+#endif
+
 extern int CPUID;
 extern int output;
 int        atfullspeed;
@@ -2002,8 +2019,19 @@ pc_run(void)
     rivatimer_update_all();
 
     /* Run a block of code. */
+#ifdef SUBSYS_PROFILE
+    uint64_t prof_frame_t0 = prof_now_ns();
+    uint64_t prof_blit_t0  = prof_frame_t0;
+#endif
     startblit();
+#ifdef SUBSYS_PROFILE
+    prof_blit_lock_acc += prof_now_ns() - prof_blit_t0;
+    uint64_t prof_cpu_t0 = prof_now_ns();
+#endif
     cpu_exec((int32_t) cpu_s->rspeed / (force_10ms ? 100 : 1000));
+#ifdef SUBSYS_PROFILE
+    prof_cpu_exec_acc += prof_now_ns() - prof_cpu_t0;
+#endif
     ack_pause();
 #ifdef USE_GDBSTUB /* avoid a KBC FIFO overflow when CPU emulation is stalled */
     if (gdbstub_step == GDBSTUB_EXEC) {
@@ -2015,6 +2043,9 @@ pc_run(void)
 #endif
     joystick_process(0); // Gameport 0
     endblit();
+#ifdef SUBSYS_PROFILE
+    prof_frame_acc += prof_now_ns() - prof_frame_t0;
+#endif
 
     /* Done with this frame, update statistics. */
     framecount++;
@@ -2059,6 +2090,37 @@ pc_onesec(void)
     framecount = 0;
 
     title_update = 1;
+
+#ifdef SUBSYS_PROFILE
+    {
+        double frame_ms   = prof_frame_acc / 1e6;
+        double cpu_ms     = prof_cpu_exec_acc / 1e6;
+        double timer_ms   = prof_timer_total_ns / 1e6;
+        double pure_cpu   = cpu_ms - timer_ms;
+        double blit_ms    = prof_blit_lock_acc / 1e6;
+        int    speed_pct  = fps / (force_10ms ? 1 : 10);
+
+        fprintf(stderr, "\n=== Emulation Performance (1s, %d%% speed, %d frames) ===\n",
+                speed_pct, fps);
+        fprintf(stderr, "Wall-clock time breakdown (budget: 1000 ms):\n");
+        fprintf(stderr, "  Total emulation:   %8.2f ms\n", frame_ms);
+        fprintf(stderr, "    CPU emulation:   %8.2f ms (%5.1f%%)  [instruction execution]\n",
+                pure_cpu, frame_ms > 0 ? pure_cpu / frame_ms * 100.0 : 0.0);
+        fprintf(stderr, "    Device callbacks: %8.2f ms (%5.1f%%)  [video, sound, timers]\n",
+                timer_ms, frame_ms > 0 ? timer_ms / frame_ms * 100.0 : 0.0);
+        fprintf(stderr, "    Render sync:     %8.2f ms (%5.1f%%)\n",
+                blit_ms, frame_ms > 0 ? blit_ms / frame_ms * 100.0 : 0.0);
+        fprintf(stderr, "    Input/other:     %8.2f ms\n",
+                frame_ms - cpu_ms - blit_ms);
+
+        prof_timer_print_reset();
+        prof_dynarec_print_reset();
+
+        prof_frame_acc     = 0;
+        prof_cpu_exec_acc  = 0;
+        prof_blit_lock_acc = 0;
+    }
+#endif
 }
 
 void

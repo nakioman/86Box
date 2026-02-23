@@ -57,6 +57,123 @@ int inrecomp                = 0;
 int cpu_block_end           = 0;
 int cpu_end_block_after_ins = 0;
 
+#ifdef SUBSYS_PROFILE
+/* Counters only — no per-block timing to avoid overhead. */
+uint32_t prof_dyn_jit_blocks       = 0;
+uint32_t prof_dyn_recomp_blocks    = 0;
+uint32_t prof_dyn_interp_blocks    = 0;
+uint32_t prof_dyn_firstpass_blocks = 0;
+uint32_t prof_dyn_dirty_flushes    = 0;
+uint32_t prof_dyn_dirty_flushes2   = 0;
+uint32_t prof_dyn_dirty_bytemask   = 0;  /* flushes from blocks WITH BYTE_MASK */
+uint32_t prof_dyn_dirty_coarse     = 0;  /* flushes from blocks WITHOUT BYTE_MASK */
+uint32_t prof_dyn_bytemask_promoted = 0; /* blocks promoted to BYTE_MASK */
+uint32_t prof_page_record_calls    = 0;
+
+/* Hot page tracker: which physical pages cause the most dirty flushes.
+   NOT static — prevent compiler from optimizing away stores in release builds. */
+#define PROF_HOT_PAGES 64
+typedef struct {
+    uint32_t page;     /* phys_addr >> 12 */
+    uint32_t count;
+} prof_hot_page_t;
+prof_hot_page_t prof_hot_pages[PROF_HOT_PAGES];
+int             prof_hot_page_count = 0;
+
+void
+prof_dirty_page_record(uint32_t phys_addr)
+{
+    uint32_t page = phys_addr >> 12;
+    int      i;
+
+    prof_page_record_calls++;
+
+    for (i = 0; i < prof_hot_page_count; i++) {
+        if (prof_hot_pages[i].page == page) {
+            prof_hot_pages[i].count++;
+            return;
+        }
+    }
+    if (prof_hot_page_count < PROF_HOT_PAGES) {
+        prof_hot_pages[prof_hot_page_count].page  = page;
+        prof_hot_pages[prof_hot_page_count].count = 1;
+        prof_hot_page_count++;
+    }
+}
+
+void
+prof_dynarec_print_reset(void)
+{
+    uint32_t total_blocks = prof_dyn_jit_blocks + prof_dyn_recomp_blocks
+                          + prof_dyn_interp_blocks + prof_dyn_firstpass_blocks;
+    uint32_t total_dirty  = prof_dyn_dirty_flushes + prof_dyn_dirty_flushes2;
+
+    fprintf(stderr, "--- Dynamic Recompiler ---\n");
+    fprintf(stderr, "  Block execution:  %u compiled, %u recompiled, %u interpreted\n",
+            prof_dyn_jit_blocks, prof_dyn_recomp_blocks, prof_dyn_interp_blocks);
+
+    if (total_dirty > 0 || prof_dyn_interp_blocks > 0) {
+        fprintf(stderr, "  Code modification: %u pages written while containing code\n",
+                total_dirty);
+        if (prof_dyn_dirty_bytemask > 0 || prof_dyn_dirty_coarse > 0)
+            fprintf(stderr, "    Precision: %u exact-byte overlap, %u 64-byte-region overlap\n",
+                    prof_dyn_dirty_bytemask, prof_dyn_dirty_coarse);
+        if (prof_dyn_interp_blocks > 0)
+            fprintf(stderr, "    Self-modifying code: %u blocks ran via interpreter\n"
+                            "      (code modified too frequently for JIT to be worthwhile)\n",
+                    prof_dyn_interp_blocks);
+
+        /* Sort hot pages descending. */
+        for (int i = 0; i < prof_hot_page_count - 1; i++) {
+            for (int j = i + 1; j < prof_hot_page_count; j++) {
+                if (prof_hot_pages[j].count > prof_hot_pages[i].count) {
+                    prof_hot_page_t tmp = prof_hot_pages[i];
+                    prof_hot_pages[i]   = prof_hot_pages[j];
+                    prof_hot_pages[j]   = tmp;
+                }
+            }
+        }
+
+        if (prof_hot_page_count > 0) {
+            fprintf(stderr, "    Memory pages with modified code:\n");
+            for (int i = 0; i < prof_hot_page_count && i < 10; i++) {
+                uint32_t addr = prof_hot_pages[i].page << 12;
+                const char *region;
+                if (addr < 0x00400)
+                    region = "IVT";
+                else if (addr < 0x00500)
+                    region = "BIOS data";
+                else if (addr < 0xA0000)
+                    region = "conventional";
+                else if (addr < 0xC0000)
+                    region = "video RAM";
+                else if (addr < 0x100000)
+                    region = "ROM/UMB";
+                else
+                    region = "extended";
+                fprintf(stderr, "      0x%05X-0x%05X  %-13s  %u modifications\n",
+                        addr, addr + 0xFFF, region, prof_hot_pages[i].count);
+            }
+        }
+    }
+
+    prof_dyn_jit_blocks       = 0;
+    prof_dyn_recomp_blocks    = 0;
+    prof_dyn_interp_blocks    = 0;
+    prof_dyn_firstpass_blocks = 0;
+    prof_dyn_dirty_flushes    = 0;
+    prof_dyn_dirty_flushes2   = 0;
+    prof_dyn_dirty_bytemask   = 0;
+    prof_dyn_dirty_coarse     = 0;
+    prof_dyn_bytemask_promoted = 0;
+    prof_page_record_calls    = 0;
+    prof_hot_page_count       = 0;
+    memset(prof_hot_pages, 0, sizeof(prof_hot_pages));
+    readlnum  = 0;
+    writelnum = 0;
+}
+#endif
+
 #ifdef ENABLE_386_DYNAREC_LOG
 int x386_dynarec_do_log = ENABLE_386_DYNAREC_LOG;
 
@@ -443,6 +560,14 @@ exec386_dynarec_dyn(void)
         }
 
         if (valid_block && (block->page_mask & *block->dirty_mask)) {
+#ifdef SUBSYS_PROFILE
+            prof_dyn_dirty_flushes++;
+            prof_dirty_page_record(phys_addr);
+            if (block->flags & CODEBLOCK_BYTE_MASK)
+                prof_dyn_dirty_bytemask++;
+            else
+                prof_dyn_dirty_coarse++;
+#endif
 #    ifdef USE_NEW_DYNAREC
             codegen_check_flush(page, page->dirty_mask, phys_addr);
             if (block->pc == BLOCK_PC_INVALID)
@@ -474,6 +599,10 @@ exec386_dynarec_dyn(void)
             if ((block->phys_2 ^ phys_addr_2) & ~0xfff)
                 valid_block = 0;
             else if (block->page_mask2 & *block->dirty_mask2) {
+#ifdef SUBSYS_PROFILE
+                prof_dyn_dirty_flushes2++;
+                prof_dirty_page_record(phys_addr_2);
+#endif
 #    ifdef USE_NEW_DYNAREC
                 codegen_check_flush(page_2, page_2->dirty_mask, phys_addr_2);
                 if (block->pc == BLOCK_PC_INVALID)
@@ -491,10 +620,17 @@ exec386_dynarec_dyn(void)
 #    ifdef USE_NEW_DYNAREC
         if (valid_block && (block->flags & CODEBLOCK_IN_DIRTY_LIST)) {
             block->flags &= ~CODEBLOCK_WAS_RECOMPILED;
-            if (block->flags & CODEBLOCK_BYTE_MASK)
+            if (block->flags & CODEBLOCK_BYTE_MASK) {
+#ifdef SUBSYS_PROFILE
+                prof_dyn_interp_blocks++;
+#endif
                 block->flags |= CODEBLOCK_NO_IMMEDIATES;
-            else
+            } else {
                 block->flags |= CODEBLOCK_BYTE_MASK;
+#ifdef SUBSYS_PROFILE
+                prof_dyn_bytemask_promoted++;
+#endif
+            }
         }
         if (valid_block && (block->flags & CODEBLOCK_WAS_RECOMPILED) && (block->flags & CODEBLOCK_STATIC_TOP) && block->TOP != (cpu_state.TOP & 7))
 #    else
@@ -529,6 +665,9 @@ exec386_dynarec_dyn(void)
         acycs = 0;
 #    endif
         inrecomp = 0;
+#ifdef SUBSYS_PROFILE
+        prof_dyn_jit_blocks++;
+#endif
 
 #    ifndef USE_NEW_DYNAREC
         if (!use32)
@@ -641,6 +780,9 @@ exec386_dynarec_dyn(void)
             pthread_jit_write_protect_np(1);
         }
 #    endif
+#ifdef SUBSYS_PROFILE
+        prof_dyn_recomp_blocks++;
+#endif
     } else if (!cpu_state.abrt) {
         /* Mark block but do not recompile */
 #    ifdef USE_NEW_DYNAREC
@@ -736,6 +878,9 @@ exec386_dynarec_dyn(void)
 
         if (x86_was_reset)
             codegen_reset();
+#ifdef SUBSYS_PROFILE
+        prof_dyn_firstpass_blocks++;
+#endif
     }
 #    ifdef USE_NEW_DYNAREC
     else
@@ -782,6 +927,9 @@ exec386_dynarec(int32_t cycs)
             if (cpu_force_interpreter || cpu_override_dynarec ||  (!CACHE_ON())) /*Interpret block*/
             {
                 exec386_dynarec_int();
+#ifdef SUBSYS_PROFILE
+                prof_dyn_interp_blocks++;
+#endif
             } else {
                 exec386_dynarec_dyn();
             }

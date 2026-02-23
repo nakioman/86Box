@@ -213,6 +213,15 @@ if(MINITRACE)
     target_link_libraries(86Box minitrace)
 endif()
 
+if(SUBSYS_PROFILE)
+    add_compile_definitions(SUBSYS_PROFILE)
+    target_compile_definitions(cpu PRIVATE SUBSYS_PROFILE)
+    if(NOT WIN32)
+        target_link_libraries(86Box dl)
+        target_link_options(86Box PRIVATE -rdynamic)
+    endif()
+endif()
+
 if(WIN32 OR (APPLE AND CMAKE_MACOSX_BUNDLE))
     # Copy the binary to the root of the install prefix on Windows and macOS
     install(TARGETS 86Box DESTINATION ".")
