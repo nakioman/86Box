@@ -620,10 +620,21 @@ exec386_dynarec_dyn(void)
 #    ifdef USE_NEW_DYNAREC
         if (valid_block && (block->flags & CODEBLOCK_IN_DIRTY_LIST)) {
             block->flags &= ~CODEBLOCK_WAS_RECOMPILED;
-            if (block->flags & CODEBLOCK_BYTE_MASK) {
+            if (block->flags & CODEBLOCK_NO_IMMEDIATES) {
+                /*
+                 * Block has been through BYTE_MASK -> NO_IMMEDIATES and is STILL
+                 * getting dirty-flushed. This is genuine self-modifying code (e.g.,
+                 * DOS extender overlay swapping). Skip the expensive recompile and
+                 * use the interpreter directly — the JIT code would be invalidated
+                 * almost immediately anyway, wasting the codegen effort.
+                 */
+                block->flags |= CODEBLOCK_HOT_SMC;
 #ifdef SUBSYS_PROFILE
                 prof_dyn_interp_blocks++;
 #endif
+                exec386_dynarec_int();
+                return;
+            } else if (block->flags & CODEBLOCK_BYTE_MASK) {
                 block->flags |= CODEBLOCK_NO_IMMEDIATES;
             } else {
                 block->flags |= CODEBLOCK_BYTE_MASK;
