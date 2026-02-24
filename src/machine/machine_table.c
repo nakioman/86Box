@@ -2167,7 +2167,7 @@ const machine_t machines[] = {
         .kbd_device               = &keyboard_pc_xt_device,
         .fdc_device               = NULL,
         .sio_device               = NULL,
-        .vid_device               = &cga_device,
+        .vid_device               = &v6355d_device,
         .snd_device               = NULL,
         .net_device               = NULL
     },
