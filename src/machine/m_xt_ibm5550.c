@@ -1605,9 +1605,6 @@ kbd_epoch_poll(void *priv)
         }
     }
 
-    if (kbd->irq_state && (kbd->pb & 0x01)) /* Trigger interrupt repeatedly (for RNA test) */
-        picint(EPOCH_IRQ3_BIT);
-
     if (!kbd->blocked) {
         if (kbd->mouse_queue_num > 0) {
             kbd->mouse_queue_num--;
@@ -1716,6 +1713,7 @@ kbd_write(uint16_t port, uint8_t val, void *priv)
                         A6xx1x: AIUEO RPQ Keyboard
                         B1xx1x, B2xx1x: Type 3, 4 Keyboard (1972 JIS layout)
                         B5xx1x: ? (standard layout)
+                        AA----: XT keyboard? (The IPL supports it, but the Japanese DOS doesn't) 
                     */
                     kbd_epoch_adddata(0xA5);
                     kbd_epoch_adddata(0x00);
