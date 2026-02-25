@@ -332,8 +332,7 @@ host_arm64_ADD_IMM(codeblock_t *block, int dst_reg, int src_n_reg, uint32_t imm_
         } else if (imm_data & 0xfff000)
             codegen_addlong(block, OPCODE_ADD_IMM | Rd(dst_reg) | Rn(src_n_reg) | IMM12((imm_data >> 12) & 0xfff) | DATPROC_IMM_SHIFT(1));
     } else {
-        host_arm64_MOVZ_IMM(block, REG_W16, imm_data & 0xffff);
-        host_arm64_MOVK_IMM(block, REG_W16, imm_data & 0xffff0000);
+        host_arm64_mov_imm(block, REG_W16, imm_data);
         codegen_addlong(block, OPCODE_ADD_LSL | Rd(dst_reg) | Rn(src_n_reg) | Rm(REG_W16) | DATPROC_SHIFT(0));
     }
 }
@@ -1378,8 +1377,7 @@ host_arm64_SUB_IMM(codeblock_t *block, int dst_reg, int src_n_reg, uint32_t imm_
         } else if (imm_data & 0xfff000)
             codegen_addlong(block, OPCODE_SUB_IMM | Rd(dst_reg) | Rn(src_n_reg) | IMM12((imm_data >> 12) & 0xfff) | DATPROC_IMM_SHIFT(1));
     } else {
-        host_arm64_MOVZ_IMM(block, REG_W16, imm_data & 0xffff);
-        host_arm64_MOVK_IMM(block, REG_W16, imm_data & 0xffff0000);
+        host_arm64_mov_imm(block, REG_W16, imm_data);
         codegen_addlong(block, OPCODE_SUB_LSL | Rd(dst_reg) | Rn(src_n_reg) | Rm(REG_W16) | DATPROC_SHIFT(0));
     }
 }
