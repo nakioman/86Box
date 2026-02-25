@@ -288,6 +288,62 @@ codegen_CMP_IMM_JZ_DEST(codeblock_t *block, uop_t *uop)
     return 0;
 }
 
+/* CMP2_OR_NZ_DEST: jump if (src_a != 0 || src_b != 0) */
+static int
+codegen_CMP2_OR_NZ_DEST(codeblock_t *block, uop_t *uop)
+{
+    int src_reg_a = HOST_REG_GET(uop->src_reg_a_real);
+    int src_reg_b = HOST_REG_GET(uop->src_reg_b_real);
+
+    host_x86_OR32_REG_REG(block, src_reg_a, src_reg_b);
+    uop->p = host_x86_JNZ_long(block);
+
+    return 0;
+}
+
+/* CMP2_AND_Z_DEST: jump if (src_a == 0 && src_b == 0) */
+static int
+codegen_CMP2_AND_Z_DEST(codeblock_t *block, uop_t *uop)
+{
+    int src_reg_a = HOST_REG_GET(uop->src_reg_a_real);
+    int src_reg_b = HOST_REG_GET(uop->src_reg_b_real);
+
+    host_x86_OR32_REG_REG(block, src_reg_a, src_reg_b);
+    uop->p = host_x86_JZ_long(block);
+
+    return 0;
+}
+
+/* CMP3_JLE_DEST: jump if (NF != VF || ZF != 0) */
+static int
+codegen_CMP3_JLE_DEST(codeblock_t *block, uop_t *uop)
+{
+    int src_reg_a = HOST_REG_GET(uop->src_reg_a_real);
+    int src_reg_b = HOST_REG_GET(uop->src_reg_b_real);
+    int src_reg_c = HOST_REG_GET(uop->src_reg_c_real);
+
+    host_x86_XOR32_REG_REG(block, src_reg_a, src_reg_b);
+    host_x86_OR32_REG_REG(block, src_reg_a, src_reg_c);
+    uop->p = host_x86_JNZ_long(block);
+
+    return 0;
+}
+
+/* CMP3_JNLE_DEST: jump if (NF == VF && ZF == 0) */
+static int
+codegen_CMP3_JNLE_DEST(codeblock_t *block, uop_t *uop)
+{
+    int src_reg_a = HOST_REG_GET(uop->src_reg_a_real);
+    int src_reg_b = HOST_REG_GET(uop->src_reg_b_real);
+    int src_reg_c = HOST_REG_GET(uop->src_reg_c_real);
+
+    host_x86_XOR32_REG_REG(block, src_reg_a, src_reg_b);
+    host_x86_OR32_REG_REG(block, src_reg_a, src_reg_c);
+    uop->p = host_x86_JZ_long(block);
+
+    return 0;
+}
+
 static int
 codegen_CMP_JB(codeblock_t *block, uop_t *uop)
 {
@@ -3109,6 +3165,19 @@ const uOpFn uop_handlers[UOP_MAX] = {
     [UOP_CMP_IMM_JZ_DEST &
         UOP_MASK]
     = codegen_CMP_IMM_JZ_DEST,
+
+    [UOP_CMP2_OR_NZ_DEST &
+        UOP_MASK]
+    = codegen_CMP2_OR_NZ_DEST,
+    [UOP_CMP2_AND_Z_DEST &
+        UOP_MASK]
+    = codegen_CMP2_AND_Z_DEST,
+    [UOP_CMP3_JLE_DEST &
+        UOP_MASK]
+    = codegen_CMP3_JLE_DEST,
+    [UOP_CMP3_JNLE_DEST &
+        UOP_MASK]
+    = codegen_CMP3_JNLE_DEST,
 
     [UOP_TEST_JNS_DEST &
         UOP_MASK]

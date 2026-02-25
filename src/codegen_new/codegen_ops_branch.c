@@ -303,17 +303,12 @@ ropJBE_common(codeblock_t *block, ir_data_t *ir, uint32_t dest_addr, uint32_t ne
 
         case FLAGS_UNKNOWN:
         default:
-            if (do_unroll) {
-                uop_CALL_FUNC_RESULT(ir, IREG_temp0, CF_SET);
-                jump_uop2 = uop_CMP_IMM_JNZ_DEST(ir, IREG_temp0, 0);
-                uop_CALL_FUNC_RESULT(ir, IREG_temp0, ZF_SET);
-                jump_uop = uop_CMP_IMM_JNZ_DEST(ir, IREG_temp0, 0);
-            } else {
-                uop_CALL_FUNC_RESULT(ir, IREG_temp0, CF_SET);
-                jump_uop2 = uop_CMP_IMM_JNZ_DEST(ir, IREG_temp0, 0);
-                uop_CALL_FUNC_RESULT(ir, IREG_temp0, ZF_SET);
-                jump_uop = uop_CMP_IMM_JZ_DEST(ir, IREG_temp0, 0);
-            }
+            uop_CALL_FUNC_RESULT(ir, IREG_temp0, CF_SET);
+            uop_CALL_FUNC_RESULT(ir, IREG_temp1, ZF_SET);
+            if (do_unroll)
+                jump_uop = uop_CMP2_OR_NZ_DEST(ir, IREG_temp0, IREG_temp1);
+            else
+                jump_uop = uop_CMP2_AND_Z_DEST(ir, IREG_temp0, IREG_temp1);
             break;
     }
     if (do_unroll) {
@@ -371,17 +366,12 @@ ropJNBE_common(codeblock_t *block, ir_data_t *ir, uint32_t dest_addr, uint32_t n
 
         case FLAGS_UNKNOWN:
         default:
-            if (do_unroll) {
-                uop_CALL_FUNC_RESULT(ir, IREG_temp0, CF_SET);
-                jump_uop2 = uop_CMP_IMM_JNZ_DEST(ir, IREG_temp0, 0);
-                uop_CALL_FUNC_RESULT(ir, IREG_temp0, ZF_SET);
-                jump_uop = uop_CMP_IMM_JZ_DEST(ir, IREG_temp0, 0);
-            } else {
-                uop_CALL_FUNC_RESULT(ir, IREG_temp0, CF_SET);
-                jump_uop = uop_CMP_IMM_JNZ_DEST(ir, IREG_temp0, 0);
-                uop_CALL_FUNC_RESULT(ir, IREG_temp0, ZF_SET);
-                jump_uop2 = uop_CMP_IMM_JNZ_DEST(ir, IREG_temp0, 0);
-            }
+            uop_CALL_FUNC_RESULT(ir, IREG_temp0, CF_SET);
+            uop_CALL_FUNC_RESULT(ir, IREG_temp1, ZF_SET);
+            if (do_unroll)
+                jump_uop = uop_CMP2_AND_Z_DEST(ir, IREG_temp0, IREG_temp1);
+            else
+                jump_uop = uop_CMP2_OR_NZ_DEST(ir, IREG_temp0, IREG_temp1);
             break;
     }
     if (do_unroll) {
@@ -720,19 +710,13 @@ ropJLE_common(codeblock_t *block, ir_data_t *ir, uint32_t dest_addr, uint32_t ne
 
         case FLAGS_UNKNOWN:
         default:
-            if (do_unroll) {
-                uop_CALL_FUNC_RESULT(ir, IREG_temp0, ZF_SET);
-                jump_uop2 = uop_CMP_IMM_JNZ_DEST(ir, IREG_temp0, 0);
-                uop_CALL_FUNC_RESULT(ir, IREG_temp0, NF_SET_01);
-                uop_CALL_FUNC_RESULT(ir, IREG_temp1, VF_SET_01);
-                jump_uop = uop_CMP_JNZ_DEST(ir, IREG_temp0, IREG_temp1);
-            } else {
-                uop_CALL_FUNC_RESULT(ir, IREG_temp0, ZF_SET);
-                jump_uop2 = uop_CMP_IMM_JNZ_DEST(ir, IREG_temp0, 0);
-                uop_CALL_FUNC_RESULT(ir, IREG_temp0, NF_SET_01);
-                uop_CALL_FUNC_RESULT(ir, IREG_temp1, VF_SET_01);
-                jump_uop = uop_CMP_JZ_DEST(ir, IREG_temp0, IREG_temp1);
-            }
+            uop_CALL_FUNC_RESULT(ir, IREG_temp0, NF_SET_01);
+            uop_CALL_FUNC_RESULT(ir, IREG_temp1, VF_SET_01);
+            uop_CALL_FUNC_RESULT(ir, IREG_temp2, ZF_SET);
+            if (do_unroll)
+                jump_uop = uop_CMP3_JLE_DEST(ir, IREG_temp0, IREG_temp1, IREG_temp2);
+            else
+                jump_uop = uop_CMP3_JNLE_DEST(ir, IREG_temp0, IREG_temp1, IREG_temp2);
             break;
     }
     if (do_unroll) {
@@ -783,19 +767,13 @@ ropJNLE_common(codeblock_t *block, ir_data_t *ir, uint32_t dest_addr, uint32_t n
 
         case FLAGS_UNKNOWN:
         default:
-            if (do_unroll) {
-                uop_CALL_FUNC_RESULT(ir, IREG_temp0, ZF_SET);
-                jump_uop2 = uop_CMP_IMM_JNZ_DEST(ir, IREG_temp0, 0);
-                uop_CALL_FUNC_RESULT(ir, IREG_temp0, NF_SET_01);
-                uop_CALL_FUNC_RESULT(ir, IREG_temp1, VF_SET_01);
-                jump_uop = uop_CMP_JZ_DEST(ir, IREG_temp0, IREG_temp1);
-            } else {
-                uop_CALL_FUNC_RESULT(ir, IREG_temp0, ZF_SET);
-                jump_uop2 = uop_CMP_IMM_JNZ_DEST(ir, IREG_temp0, 0);
-                uop_CALL_FUNC_RESULT(ir, IREG_temp0, NF_SET_01);
-                uop_CALL_FUNC_RESULT(ir, IREG_temp1, VF_SET_01);
-                jump_uop = uop_CMP_JNZ_DEST(ir, IREG_temp0, IREG_temp1);
-            }
+            uop_CALL_FUNC_RESULT(ir, IREG_temp0, NF_SET_01);
+            uop_CALL_FUNC_RESULT(ir, IREG_temp1, VF_SET_01);
+            uop_CALL_FUNC_RESULT(ir, IREG_temp2, ZF_SET);
+            if (do_unroll)
+                jump_uop = uop_CMP3_JNLE_DEST(ir, IREG_temp0, IREG_temp1, IREG_temp2);
+            else
+                jump_uop = uop_CMP3_JLE_DEST(ir, IREG_temp0, IREG_temp1, IREG_temp2);
             break;
     }
     if (do_unroll) {
