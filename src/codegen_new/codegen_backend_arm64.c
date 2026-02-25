@@ -240,43 +240,51 @@ build_loadstore_routines(codeblock_t *block)
 static void
 build_fp_round_routine(codeblock_t *block, int is_quad)
 {
-    uint64_t *jump_table;
+    uint32_t *nearest_offset;
+    uint32_t *down_offset;
+    uint32_t *up_offset;
 
     codegen_alloc(block, 80);
     host_arm64_LDR_IMM_W(block, REG_TEMP, REG_CPUSTATE, (uintptr_t) &cpu_state.new_fp_control - (uintptr_t) &cpu_state);
-    host_arm64_ADR(block, REG_TEMP2, 12);
-    host_arm64_LDR_REG_X(block, REG_TEMP2, REG_TEMP2, REG_TEMP);
-    host_arm64_BR(block, REG_TEMP2);
 
-    jump_table = (uint64_t *) &block_write_data[block_pos];
-    block_pos += 4 * 8;
+    /*NEAREST (mode << 3 == 0) - most common, check first*/
+    host_arm64_CMP_IMM(block, REG_TEMP, 0);
+    nearest_offset = host_arm64_BEQ_(block);
 
-    jump_table[X87_ROUNDING_NEAREST] = (uint64_t) (uintptr_t) &block_write_data[block_pos]; // tie even
+    /*DOWN (mode << 3 == 8)*/
+    host_arm64_CMP_IMM(block, REG_TEMP, 8);
+    down_offset = host_arm64_BEQ_(block);
+
+    /*UP (mode << 3 == 16)*/
+    host_arm64_CMP_IMM(block, REG_TEMP, 16);
+    up_offset = host_arm64_BEQ_(block);
+
+    /*Fall through = CHOP (mode << 3 == 24)*/
+    if (is_quad)
+        host_arm64_FCVTZS_X_D(block, REG_TEMP, REG_V_TEMP);
+    else
+        host_arm64_FCVTZS_W_D(block, REG_TEMP, REG_V_TEMP);
+    host_arm64_RET(block, REG_X30);
+
+    host_arm64_branch_set_offset(nearest_offset, &block_write_data[block_pos]);
     if (is_quad)
         host_arm64_FCVTNS_X_D(block, REG_TEMP, REG_V_TEMP);
     else
         host_arm64_FCVTNS_W_D(block, REG_TEMP, REG_V_TEMP);
     host_arm64_RET(block, REG_X30);
 
-    jump_table[X87_ROUNDING_UP] = (uint64_t) (uintptr_t) &block_write_data[block_pos]; // pos inf
-    if (is_quad)
-        host_arm64_FCVTPS_X_D(block, REG_TEMP, REG_V_TEMP);
-    else
-        host_arm64_FCVTPS_W_D(block, REG_TEMP, REG_V_TEMP);
-    host_arm64_RET(block, REG_X30);
-
-    jump_table[X87_ROUNDING_DOWN] = (uint64_t) (uintptr_t) &block_write_data[block_pos]; // neg inf
+    host_arm64_branch_set_offset(down_offset, &block_write_data[block_pos]);
     if (is_quad)
         host_arm64_FCVTMS_X_D(block, REG_TEMP, REG_V_TEMP);
     else
         host_arm64_FCVTMS_W_D(block, REG_TEMP, REG_V_TEMP);
     host_arm64_RET(block, REG_X30);
 
-    jump_table[X87_ROUNDING_CHOP] = (uint64_t) (uintptr_t) &block_write_data[block_pos]; // zero
+    host_arm64_branch_set_offset(up_offset, &block_write_data[block_pos]);
     if (is_quad)
-        host_arm64_FCVTZS_X_D(block, REG_TEMP, REG_V_TEMP);
+        host_arm64_FCVTPS_X_D(block, REG_TEMP, REG_V_TEMP);
     else
-        host_arm64_FCVTZS_W_D(block, REG_TEMP, REG_V_TEMP);
+        host_arm64_FCVTPS_W_D(block, REG_TEMP, REG_V_TEMP);
     host_arm64_RET(block, REG_X30);
 }
 
