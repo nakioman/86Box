@@ -191,12 +191,23 @@ void
 codegen_allocator_clean_blocks(UNUSED(struct mem_block_t *block))
 {
 #if defined __ARM_EABI__ || defined __aarch64__ || defined _M_ARM64
-    while (1) {
-        __clear_cache(&mem_block_alloc[block->offset], &mem_block_alloc[block->offset + MEM_BLOCK_SIZE]);
-        if (block->next)
-            block = &mem_blocks[block->next - 1];
-        else
-            break;
+    uint8_t *range_start = &mem_block_alloc[block->offset];
+    uint8_t *range_end   = range_start + MEM_BLOCK_SIZE;
+
+    while (block->next) {
+        block = &mem_blocks[block->next - 1];
+        uint8_t *block_start = &mem_block_alloc[block->offset];
+
+        if (block_start == range_end) {
+            /*Contiguous with current range - extend it*/
+            range_end = block_start + MEM_BLOCK_SIZE;
+        } else {
+            /*Non-contiguous - flush accumulated range and start new one*/
+            __clear_cache(range_start, range_end);
+            range_start = block_start;
+            range_end   = block_start + MEM_BLOCK_SIZE;
+        }
     }
+    __clear_cache(range_start, range_end);
 #endif
 }
