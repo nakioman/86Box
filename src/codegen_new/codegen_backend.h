@@ -33,4 +33,11 @@ typedef struct host_reg_def_t {
 extern host_reg_def_t codegen_host_reg_list[CODEGEN_HOST_REGS];
 extern host_reg_def_t codegen_host_fp_reg_list[CODEGEN_HOST_FP_REGS];
 
+/*Relocate the unconditional B in a conditional branch sequence to make room
+  for flag stores on the taken path. Returns the number of stores inserted.
+  The handler must have just emitted [...CMP/CCMP...] B.cond B as its last
+  two instructions. This function inserts flag STR instructions between
+  B.cond and B, patches B.cond's offset, and updates uop->p.*/
+int codegen_branch_patch_flush_flags(codeblock_t *block, struct uop_t *uop);
+
 #endif
