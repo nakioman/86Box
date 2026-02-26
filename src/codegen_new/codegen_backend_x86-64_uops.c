@@ -3596,4 +3596,11 @@ codegen_direct_write_32_imm_stack(codeblock_t *block, int stack_offset, uint32_t
     host_x86_MOV32_BASE_OFFSET_IMM(block, REG_ESP, stack_offset, imm_data);
 }
 
+int
+codegen_branch_patch_flush_flags(UNUSED(codeblock_t *block), UNUSED(uop_t *uop))
+{
+    /*Not implemented for x86-64 - flag stores are cheap on x86*/
+    return 0;
+}
+
 #endif

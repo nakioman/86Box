@@ -846,6 +846,80 @@ codegen_reg_flush(UNUSED(ir_data_t *ir), codeblock_t *block)
 }
 
 void
+codegen_reg_flush_except_flags(UNUSED(ir_data_t *ir), codeblock_t *block)
+{
+    host_reg_set_t *reg_set;
+    int             c;
+
+    reg_set = &host_reg_set;
+    for (c = 0; c < reg_set->nr_regs; c++) {
+        if (!ir_reg_is_invalid(reg_set->regs[c]) && reg_set->dirty[c]) {
+            int ir_reg = IREG_GET_REG(reg_set->regs[c].reg);
+            if (ir_reg >= IREG_flags_op && ir_reg <= IREG_flags_op2)
+                continue;
+            codegen_reg_writeback(reg_set, block, c, 0);
+        }
+        if (reg_set->reg_list[c].flags & HOST_REG_FLAG_VOLATILE) {
+            if (!ir_reg_is_invalid(reg_set->regs[c])) {
+                int ir_reg = IREG_GET_REG(reg_set->regs[c].reg);
+                if (ir_reg >= IREG_flags_op && ir_reg <= IREG_flags_op2)
+                    continue;
+            }
+            reg_set->regs[c]  = invalid_ir_reg;
+            reg_set->dirty[c] = 0;
+        }
+    }
+
+    reg_set = &host_fp_reg_set;
+    for (c = 0; c < reg_set->nr_regs; c++) {
+        if (!ir_reg_is_invalid(reg_set->regs[c]) && reg_set->dirty[c]) {
+            codegen_reg_writeback(reg_set, block, c, 0);
+        }
+        if (reg_set->reg_list[c].flags & HOST_REG_FLAG_VOLATILE) {
+            reg_set->regs[c]  = invalid_ir_reg;
+            reg_set->dirty[c] = 0;
+        }
+    }
+}
+
+int
+codegen_reg_emit_flag_stores(codeblock_t *block)
+{
+    host_reg_set_t *reg_set = &host_reg_set;
+    int             c;
+    int             count = 0;
+
+    for (c = 0; c < reg_set->nr_regs; c++) {
+        if (!ir_reg_is_invalid(reg_set->regs[c]) && reg_set->dirty[c]) {
+            int ir_reg = IREG_GET_REG(reg_set->regs[c].reg);
+            if (ir_reg >= IREG_flags_op && ir_reg <= IREG_flags_op2) {
+                codegen_reg_writeback(reg_set, block, c, 0);
+                reg_set->dirty[c] = 1; /*Keep dirty for fall-through path*/
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
+int
+codegen_reg_count_dirty_flags(void)
+{
+    host_reg_set_t *reg_set = &host_reg_set;
+    int             c;
+    int             count = 0;
+
+    for (c = 0; c < reg_set->nr_regs; c++) {
+        if (!ir_reg_is_invalid(reg_set->regs[c]) && reg_set->dirty[c]) {
+            int ir_reg = IREG_GET_REG(reg_set->regs[c].reg);
+            if (ir_reg >= IREG_flags_op && ir_reg <= IREG_flags_op2)
+                count++;
+        }
+    }
+    return count;
+}
+
+void
 codegen_reg_flush_invalidate(UNUSED(ir_data_t *ir), codeblock_t *block)
 {
     host_reg_set_t *reg_set;

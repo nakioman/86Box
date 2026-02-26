@@ -405,6 +405,13 @@ struct ir_data_t;
 void codegen_reg_reset(void);
 /*Write back all dirty registers*/
 void codegen_reg_flush(struct ir_data_t *ir, codeblock_t *block);
+/*Write back all dirty registers except flag registers (flags_op..flags_op2)*/
+void codegen_reg_flush_except_flags(struct ir_data_t *ir, codeblock_t *block);
+/*Emit stores for dirty flag registers. Dirty bits are preserved so the
+  fall-through path can re-flush at later barriers. Returns store count.*/
+int  codegen_reg_emit_flag_stores(codeblock_t *block);
+/*Count dirty flag registers currently in host registers*/
+int  codegen_reg_count_dirty_flags(void);
 /*Write back and evict all registers*/
 void codegen_reg_flush_invalidate(struct ir_data_t *ir, codeblock_t *block);
 

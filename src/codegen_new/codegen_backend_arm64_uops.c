@@ -17,6 +17,7 @@
 #    include "codegen_backend_arm64_defs.h"
 #    include "codegen_backend_arm64_ops.h"
 #    include "codegen_ir_defs.h"
+#    include "codegen_reg.h"
 
 #    define OFFSET19(offset)  (((offset >> 2) << 5) & 0x00ffffe0)
 
@@ -3669,6 +3670,36 @@ void
 codegen_direct_write_double_stack(codeblock_t *block, int stack_offset, int host_reg)
 {
     host_arm64_STR_IMM_F64(block, host_reg, REG_XSP, stack_offset);
+}
+
+int
+codegen_branch_patch_flush_flags(codeblock_t *block, uop_t *uop)
+{
+    int n_dirty = codegen_reg_count_dirty_flags();
+    if (n_dirty == 0)
+        return 0;
+
+    /*Handler just emitted: [...CMP/CCMP...] B.cond B
+      B.cond is at block_pos-8, B is at block_pos-4.
+      We overwrite B with flag stores, then re-emit B after them,
+      and patch B.cond to skip over the stores+B to fall-through.*/
+    uint32_t *bcond_p = (uint32_t *) &block_write_data[block_pos - 8];
+    uint32_t  saved_b = *(uint32_t *) &block_write_data[block_pos - 4];
+
+    block_pos -= 4; /*Back up over B*/
+    int n_stores = codegen_reg_emit_flag_stores(block);
+    /*Re-emit B*/
+    *(uint32_t *) &block_write_data[block_pos] = saved_b;
+    block_pos += 4;
+
+    /*Patch B.cond offset: was +8 (skip 1 instr), now skip stores+B*/
+    int new_offset = n_stores * 4 + 8;
+    *bcond_p = (*bcond_p & ~0x00ffffe0u) | (uint32_t) OFFSET19(new_offset);
+
+    /*Update uop->p to relocated B for later jump-dest patching*/
+    uop->p = (void *) &block_write_data[block_pos - 4];
+
+    return n_stores;
 }
 
 void

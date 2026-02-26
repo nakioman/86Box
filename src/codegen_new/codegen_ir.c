@@ -139,8 +139,17 @@ codegen_ir_compile(ir_data_t *ir, codeblock_t *block)
                 }
             }
 
-            if (uop->type & UOP_TYPE_ORDER_BARRIER)
-                codegen_reg_flush(ir, block);
+            int deferred_flag_stores = 0;
+            if (uop->type & UOP_TYPE_ORDER_BARRIER) {
+                if ((uop->type & UOP_TYPE_JUMP)
+                    && block_pos + 64 <= BLOCK_MAX
+                    && codegen_reg_count_dirty_flags() > 0) {
+                    codegen_reg_flush_except_flags(ir, block);
+                    deferred_flag_stores = 1;
+                } else {
+                    codegen_reg_flush(ir, block);
+                }
+            }
 
             if (uop->type & UOP_TYPE_PARAMS_REGS) {
                 if (uop->dest_reg_a.reg != IREG_INVALID) {
@@ -152,6 +161,8 @@ codegen_ir_compile(ir_data_t *ir, codeblock_t *block)
                 fatal("!uop_handlers[uop->type & UOP_MASK] %08x\n", uop->type);
 #endif
             uop_handlers[uop->type & UOP_MASK](block, uop);
+            if (deferred_flag_stores)
+                codegen_branch_patch_flush_flags(block, uop);
         }
 
         if (uop->type & UOP_TYPE_JUMP) {
