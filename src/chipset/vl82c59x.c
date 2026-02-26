@@ -622,7 +622,7 @@ vl82c59x_init(UNUSED(const device_t *info))
     dev->port_92 = device_add(&port_92_device);
 
     /* NVR */
-    dev->nvr = device_add(&at_nvr_device);
+    dev->nvr = device_add_params(&nvr_at_device, (void *) (uintptr_t) NVR_AT);
 
     dev->smram[0] = smram_add();
     dev->smram[1] = smram_add();
