@@ -263,12 +263,12 @@
 #define LG_SET_RESET_2          0x10
 
 #ifndef RELEASE_BUILD
-// #define ENABLE_DA2_LOG 1
+#define ENABLE_DA2_LOG 1
 #endif
 
 #ifdef ENABLE_DA2_LOG
-#    define ENABLE_DA2_DEBUGIO 1
-#    define ENABLE_DA2_DEBUGBLT 1
+// #    define ENABLE_DA2_DEBUGIO 1
+// #    define ENABLE_DA2_DEBUGBLT 1
 // #    define ENABLE_DA2_DEBUGVRAM 1
 // #    define ENABLE_DA2_DEBUGFULLSCREEN 1
 // #    define ENABLE_DA2_DEBUGMONWAIT 1
@@ -1379,7 +1379,7 @@ da2_out(uint16_t addr, uint16_t val, void *priv)
                 case LC_START_H_DISPLAY_ENAB:
                 case LC_START_V_DISPLAY_ENAB:
                 case LC_VIEWPORT_SELECT:
-                case LC_VIEWPORT_PRIORITY:
+                case LC_COMMAND:
                     da2->fullchange = 3;
                     da2_recalctimings(da2);
                     break;
@@ -2368,7 +2368,8 @@ da2_recalctimings(da2_t *da2)
     if (!(da2->ioctl[LS_MODE] & 0x01)) {
         da2->hdisp *= 16;
         da2->char_width = 13;
-        if (da2->crtc[LC_VIEWPORT_PRIORITY] & 0x80) {
+        // if (da2->crtc[LC_VIEWPORT_PRIORITY] & 0x80) {
+        if (da2->crtc[LC_COMMAND] & 0x40) {
             da2_log("Set videomode to PS/55 8 bpp graphics.\n");
             da2->render            = da2_render_color_8bpp;
             da2->vram_display_mask = DA2_MASK_A000;
