@@ -366,7 +366,10 @@ codegen_reg_write(int reg, int uop_nr)
     if (dirty_ir_regs[(IREG_GET_REG(reg) >> 6) & 3] & (1ull << ((uint64_t)IREG_GET_REG(reg) & 0x3full))) {
         dirty_ir_regs[(IREG_GET_REG(reg) >> 6) & 3] &= ~(1ull << ((uint64_t)IREG_GET_REG(reg) & 0x3full));
         if ((IREG_GET_REG(reg) > IREG_EBX && IREG_GET_REG(reg) < IREG_temp0) && last_version > 0) {
-            reg_version[IREG_GET_REG(reg)][last_version].flags |= REG_FLAGS_REQUIRED;
+            int base_reg = IREG_GET_REG(reg);
+            if (base_reg < IREG_flags_op || base_reg > IREG_flags_op2
+                || reg_version[base_reg][last_version].refcount != 0)
+                reg_version[base_reg][last_version].flags |= REG_FLAGS_REQUIRED;
         }
     }
     ireg.reg     = reg;
