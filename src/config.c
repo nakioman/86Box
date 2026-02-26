@@ -1032,18 +1032,21 @@ load_image_file(char *dest, char *p, uint8_t *ui_wp)
     }
 
     if (strstr(p, "wp://") == p) {
-       p += 5;
-       prefix = "wp://";
-       if (ui_wp != NULL)
-           *ui_wp = 1;
+        p += 5;
+        prefix = "wp://";
+        if (ui_wp != NULL)
+            *ui_wp = 1;
     } else if ((ui_wp != NULL) && *ui_wp)
-       prefix = "wp://";
+        prefix = "wp://";
 
     if (strstr(p, "ioctl://") == p) {
-       if (strlen(p) > (MAX_IMAGE_PATH_LEN - 11))
-           ret = 1;
-       else
-           snprintf(dest, MAX_IMAGE_PATH_LEN, "%s", p);
+        if (strlen(p) > (MAX_IMAGE_PATH_LEN - 11))
+            ret = 1;
+        else
+            snprintf(dest, MAX_IMAGE_PATH_LEN, "%s", p);
+
+        if (above2 != NULL)
+            free(above2);
 
         if (above != NULL)
             free(above);
@@ -1060,11 +1063,11 @@ load_image_file(char *dest, char *p, uint8_t *ui_wp)
                      p + strlen("<exe_path>/"));
     } else if (memcmp(p, "../../", strlen("../../")) == 0) {
         use = (above2 == NULL) ? usr_path : above2;
-        if ((strlen(prefix) + strlen(use) + strlen(path_get_slash(use)) + strlen(p + strlen("../"))) >
+        if ((strlen(prefix) + strlen(use) + strlen(path_get_slash(use)) + strlen(p + strlen("../../"))) >
             (MAX_IMAGE_PATH_LEN - 11))
             ret = 1;
         else
-            snprintf(dest, MAX_IMAGE_PATH_LEN, "%s%s%s%s", prefix, use, path_get_slash(use), p + strlen("../"));
+            snprintf(dest, MAX_IMAGE_PATH_LEN, "%s%s%s%s", prefix, use, path_get_slash(use), p + strlen("../../"));
     } else if (memcmp(p, "../", strlen("../")) == 0) {
         use = (above == NULL) ? usr_path : above;
         if ((strlen(prefix) + strlen(use) + strlen(path_get_slash(use)) + strlen(p + strlen("../"))) >
@@ -1085,6 +1088,9 @@ load_image_file(char *dest, char *p, uint8_t *ui_wp)
     }
 
     path_normalize(dest);
+
+    if (above2 != NULL)
+        free(above2);
 
     if (above != NULL)
         free(above);
@@ -3193,7 +3199,7 @@ save_image_file(char *cat, char *var, char *src)
     else if (!strnicmp(src, usr_path, strlen(usr_path)))
         sprintf(temp, "%s%s", prefix, &src[strlen(usr_path)]);
     /* Do not relativize to root. */
-    else if ((above2 != NULL) && (above3 != NULL) && !strnicmp(src, above, strlen(above2)))
+    else if ((above2 != NULL) && (above3 != NULL) && !strnicmp(src, above2, strlen(above2)))
         sprintf(temp, "../../%s%s", prefix, &src[strlen(above2)]);
     /* Do not relativize to root. */
     else if ((above != NULL) && (above2 != NULL) && !strnicmp(src, above, strlen(above)))
@@ -3204,6 +3210,12 @@ save_image_file(char *cat, char *var, char *src)
         sprintf(temp, "%s%s", prefix, src);
 
     ini_section_set_string(cat, var, temp);
+
+    if (above3 != NULL)
+        free(above3);
+
+    if (above2 != NULL)
+        free(above2);
 
     if (above != NULL)
         free(above);
