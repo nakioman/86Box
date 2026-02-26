@@ -3688,7 +3688,9 @@ codegen_branch_patch_flush_flags(codeblock_t *block, uop_t *uop)
 
     block_pos -= 4; /*Back up over B*/
     int n_stores = codegen_reg_emit_flag_stores(block);
-    codegen_addlong(block, saved_b); /*Re-emit B*/
+    /*Re-emit B*/
+    *(uint32_t *) &block_write_data[block_pos] = saved_b;
+    block_pos += 4;
 
     /*Patch B.cond offset: was +8 (skip 1 instr), now skip stores+B*/
     int new_offset = n_stores * 4 + 8;
