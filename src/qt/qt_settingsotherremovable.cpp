@@ -121,7 +121,7 @@ SettingsOtherRemovable::setRDiskType(QAbstractItemModel *model, const QModelInde
     auto i = idx.siblingAtColumn(0);
     model->setData(i, icon, Qt::DecorationRole);
 
-    auto i = idx.siblingAtColumn(1);
+    i = idx.siblingAtColumn(1);
     if (idx.siblingAtColumn(0).data(Qt::UserRole).toUInt() == RDISK_BUS_DISABLED)
         model->setData(i, QCoreApplication::translate("", "None"));
     else
