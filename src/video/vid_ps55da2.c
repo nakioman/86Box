@@ -263,7 +263,7 @@
 #define LG_SET_RESET_2          0x10
 
 #ifndef RELEASE_BUILD
-#define ENABLE_DA2_LOG 1
+// #define ENABLE_DA2_LOG 1
 #endif
 
 #ifdef ENABLE_DA2_LOG
@@ -3228,6 +3228,13 @@ da2_reset_ioctl(da2_t *da2)
     da2->ioctl[LS_RESET] = 0x00;     /* Bit 0: Reset sequencer */
     da2_outw(LS_INDEX, 0x0302, da2); /* Index 02, Bit 1: VGA passthrough, Bit 0: Character Mode */
     da2_outw(LS_INDEX, 0x0008, da2); /* Index 08, Bit 0: Enable MMIO */
+    /* Set default color palette (Windows 3.1 display driver won't reset palette regs) */
+    for (uint16_t i = 0; i < 256; i++) {
+        da2->vgapal[i].r = ps55_palette_color[i & 0x3F][0];
+        da2->vgapal[i].g = ps55_palette_color[i & 0x3F][1];
+        da2->vgapal[i].b = ps55_palette_color[i & 0x3F][2];
+        da2->pallook[i]  = makecol32((da2->vgapal[i].r & 0x3f) * 4, (da2->vgapal[i].g & 0x3f) * 4, (da2->vgapal[i].b & 0x3f) * 4);
+    }
 }
 
 static void
@@ -3255,13 +3262,6 @@ da2_reset(void *priv)
     da2->attrc[LV_CURSOR_CONTROL]  = 0x13; /* cursor options */
     da2->attr_palette_enable       = 0;    /* disable attribute generator */
 
-    /* Set default color palette (Windows 3.1 display driver won't reset palette) */
-    for (uint16_t i = 0; i < 256; i++) {
-        da2->vgapal[i].r = ps55_palette_color[i & 0x3F][0];
-        da2->vgapal[i].g = ps55_palette_color[i & 0x3F][1];
-        da2->vgapal[i].b = ps55_palette_color[i & 0x3F][2];
-        da2->pallook[i]  = makecol32((da2->vgapal[i].r & 0x3f) * 4, (da2->vgapal[i].g & 0x3f) * 4, (da2->vgapal[i].b & 0x3f) * 4);
-    }
     da2_log("da2_reset done.\n");
 }
 
