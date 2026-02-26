@@ -277,6 +277,76 @@ codegen_CMP_IMM_JZ_DEST(codeblock_t *block, uop_t *uop)
     return 0;
 }
 
+/* CMP2_OR_NZ_DEST: jump if (src_a != 0 || src_b != 0)
+   CMP src_a, #0    — Z=1 if a==0
+   CCMP src_b, #0, #0, EQ — if a==0, test b; else nzcv=0 (Z=0)
+   BNE taken        — Z=0 means a!=0 or b!=0 */
+static int
+codegen_CMP2_OR_NZ_DEST(codeblock_t *block, uop_t *uop)
+{
+    int src_reg_a = HOST_REG_GET(uop->src_reg_a_real);
+    int src_reg_b = HOST_REG_GET(uop->src_reg_b_real);
+
+    host_arm64_CMP_IMM(block, src_reg_a, 0);
+    host_arm64_CCMP_IMM(block, src_reg_b, 0, 0, 0x0 /*EQ*/);
+    uop->p = host_arm64_BNE_(block);
+
+    return 0;
+}
+
+/* CMP2_AND_Z_DEST: jump if (src_a == 0 && src_b == 0)
+   CMP src_a, #0    — Z=1 if a==0
+   CCMP src_b, #0, #0, EQ — if a==0, test b; else nzcv=0 (Z=0, forces NE)
+   BEQ taken        — Z=1 means both zero */
+static int
+codegen_CMP2_AND_Z_DEST(codeblock_t *block, uop_t *uop)
+{
+    int src_reg_a = HOST_REG_GET(uop->src_reg_a_real);
+    int src_reg_b = HOST_REG_GET(uop->src_reg_b_real);
+
+    host_arm64_CMP_IMM(block, src_reg_a, 0);
+    host_arm64_CCMP_IMM(block, src_reg_b, 0, 0, 0x0 /*EQ*/);
+    uop->p = host_arm64_BEQ_(block);
+
+    return 0;
+}
+
+/* CMP3_JLE_DEST: jump if (NF != VF || ZF != 0)
+   CMP src_a, src_b — Z=1 if NF==VF
+   CCMP src_c, #0, #0, EQ — if NF==VF, test ZF; else nzcv=0 (Z=0, forces NE)
+   BNE taken        — NF!=VF (forced NE) or ZF!=0 */
+static int
+codegen_CMP3_JLE_DEST(codeblock_t *block, uop_t *uop)
+{
+    int src_reg_a = HOST_REG_GET(uop->src_reg_a_real);
+    int src_reg_b = HOST_REG_GET(uop->src_reg_b_real);
+    int src_reg_c = HOST_REG_GET(uop->src_reg_c_real);
+
+    host_arm64_CMP_REG(block, src_reg_a, src_reg_b);
+    host_arm64_CCMP_IMM(block, src_reg_c, 0, 0, 0x0 /*EQ*/);
+    uop->p = host_arm64_BNE_(block);
+
+    return 0;
+}
+
+/* CMP3_JNLE_DEST: jump if (NF == VF && ZF == 0)
+   CMP src_a, src_b — Z=1 if NF==VF
+   CCMP src_c, #0, #0, EQ — if NF==VF, test ZF; else nzcv=0 (Z=0)
+   BEQ taken        — Z=1 means NF==VF and ZF==0 */
+static int
+codegen_CMP3_JNLE_DEST(codeblock_t *block, uop_t *uop)
+{
+    int src_reg_a = HOST_REG_GET(uop->src_reg_a_real);
+    int src_reg_b = HOST_REG_GET(uop->src_reg_b_real);
+    int src_reg_c = HOST_REG_GET(uop->src_reg_c_real);
+
+    host_arm64_CMP_REG(block, src_reg_a, src_reg_b);
+    host_arm64_CCMP_IMM(block, src_reg_c, 0, 0, 0x0 /*EQ*/);
+    uop->p = host_arm64_BEQ_(block);
+
+    return 0;
+}
+
 static int
 codegen_CMP_JB(codeblock_t *block, uop_t *uop)
 {
@@ -3165,6 +3235,19 @@ const uOpFn uop_handlers[UOP_MAX] = {
     [UOP_CMP_IMM_JZ_DEST &
         UOP_MASK]
     = codegen_CMP_IMM_JZ_DEST,
+
+    [UOP_CMP2_OR_NZ_DEST &
+        UOP_MASK]
+    = codegen_CMP2_OR_NZ_DEST,
+    [UOP_CMP2_AND_Z_DEST &
+        UOP_MASK]
+    = codegen_CMP2_AND_Z_DEST,
+    [UOP_CMP3_JLE_DEST &
+        UOP_MASK]
+    = codegen_CMP3_JLE_DEST,
+    [UOP_CMP3_JNLE_DEST &
+        UOP_MASK]
+    = codegen_CMP3_JNLE_DEST,
 
     [UOP_TEST_JNS_DEST &
         UOP_MASK]

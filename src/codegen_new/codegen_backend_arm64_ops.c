@@ -699,6 +699,20 @@ host_arm64_CMP_REG_LSL(codeblock_t *block, int src_n_reg, int src_m_reg, int shi
     codegen_addlong(block, OPCODE_CMP_LSL | Rd(0x1f) | Rn(src_n_reg) | Rm(src_m_reg) | DATPROC_SHIFT(shift));
 }
 
+/* CCMP (immediate), 32-bit: if (cond) flags = CMP(Rn, imm5); else flags = nzcv */
+void
+host_arm64_CCMP_IMM(codeblock_t *block, int rn, uint32_t imm5, uint32_t nzcv, uint32_t cond)
+{
+    codegen_addlong(block, 0x7A400800 | (imm5 << 16) | (cond << 12) | Rn(rn) | (nzcv & 0xf));
+}
+
+/* CCMP (register), 32-bit: if (cond) flags = CMP(Rn, Rm); else flags = nzcv */
+void
+host_arm64_CCMP_REG(codeblock_t *block, int rn, int rm, uint32_t nzcv, uint32_t cond)
+{
+    codegen_addlong(block, 0x7A400000 | Rm(rm) | (cond << 12) | Rn(rn) | (nzcv & 0xf));
+}
+
 void
 host_arm64_CSEL_CC(codeblock_t *block, int dst_reg, int src_n_reg, int src_m_reg)
 {

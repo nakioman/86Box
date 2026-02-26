@@ -324,7 +324,16 @@
 /*UOP_PFRSQRT - (packed float) dest_reg[0] = dest_reg[1] = 1.0 / sqrt(src_reg[0])*/
 #define UOP_PFRSQRT (UOP_TYPE_PARAMS_REGS | 0xc5)
 
-#define UOP_MAX     0xc6
+/*UOP_CMP2_OR_NZ_DEST - jump if (src_reg_a != 0 || src_reg_b != 0)*/
+#define UOP_CMP2_OR_NZ_DEST  (UOP_TYPE_PARAMS_REGS | UOP_TYPE_PARAMS_POINTER | 0xc6 | UOP_TYPE_ORDER_BARRIER | UOP_TYPE_JUMP)
+/*UOP_CMP2_AND_Z_DEST - jump if (src_reg_a == 0 && src_reg_b == 0)*/
+#define UOP_CMP2_AND_Z_DEST  (UOP_TYPE_PARAMS_REGS | UOP_TYPE_PARAMS_POINTER | 0xc7 | UOP_TYPE_ORDER_BARRIER | UOP_TYPE_JUMP)
+/*UOP_CMP3_JLE_DEST - jump if (src_reg_a != src_reg_b || src_reg_c != 0)*/
+#define UOP_CMP3_JLE_DEST    (UOP_TYPE_PARAMS_REGS | UOP_TYPE_PARAMS_POINTER | 0xc8 | UOP_TYPE_ORDER_BARRIER | UOP_TYPE_JUMP)
+/*UOP_CMP3_JNLE_DEST - jump if (src_reg_a == src_reg_b && src_reg_c == 0)*/
+#define UOP_CMP3_JNLE_DEST   (UOP_TYPE_PARAMS_REGS | UOP_TYPE_PARAMS_POINTER | 0xc9 | UOP_TYPE_ORDER_BARRIER | UOP_TYPE_JUMP)
+
+#define UOP_MAX     0xca
 
 #define UOP_INVALID 0xff
 
@@ -592,6 +601,19 @@ uop_gen_reg_src3(uint32_t uop_type, ir_data_t *ir, int src_reg_a, int src_reg_b,
     uop->src_reg_c = codegen_reg_read(src_reg_c);
 }
 
+static inline int
+uop_gen_reg_src3_ret(uint32_t uop_type, ir_data_t *ir, int src_reg_a, int src_reg_b, int src_reg_c)
+{
+    uop_t *uop = uop_alloc(ir, uop_type);
+
+    uop->type      = uop_type;
+    uop->src_reg_a = codegen_reg_read(src_reg_a);
+    uop->src_reg_b = codegen_reg_read(src_reg_b);
+    uop->src_reg_c = codegen_reg_read(src_reg_c);
+
+    return ir->wr_pos - 1;
+}
+
 static inline void
 uop_gen_reg_src3_imm(uint32_t uop_type, ir_data_t *ir, int src_reg_a, int src_reg_b, int src_reg_c, uint32_t imm)
 {
@@ -723,6 +745,11 @@ extern int codegen_fp_enter(void);
 #define uop_CMP_JLE_DEST(ir, src_reg_a, src_reg_b)               uop_gen_reg_src2(UOP_CMP_JLE_DEST, ir, src_reg_a, src_reg_b)
 #define uop_CMP_JO_DEST(ir, src_reg_a, src_reg_b)                uop_gen_reg_src2(UOP_CMP_JO_DEST, ir, src_reg_a, src_reg_b)
 #define uop_CMP_JZ_DEST(ir, src_reg_a, src_reg_b)                uop_gen_reg_src2(UOP_CMP_JZ_DEST, ir, src_reg_a, src_reg_b)
+
+#define uop_CMP2_OR_NZ_DEST(ir, a, b)                            uop_gen_reg_src2(UOP_CMP2_OR_NZ_DEST, ir, a, b)
+#define uop_CMP2_AND_Z_DEST(ir, a, b)                            uop_gen_reg_src2(UOP_CMP2_AND_Z_DEST, ir, a, b)
+#define uop_CMP3_JLE_DEST(ir, a, b, c)                           uop_gen_reg_src3_ret(UOP_CMP3_JLE_DEST, ir, a, b, c)
+#define uop_CMP3_JNLE_DEST(ir, a, b, c)                          uop_gen_reg_src3_ret(UOP_CMP3_JNLE_DEST, ir, a, b, c)
 
 #define uop_FADD(ir, dst_reg, src_reg_a, src_reg_b)              uop_gen_reg_dst_src2(UOP_FADD, ir, dst_reg, src_reg_a, src_reg_b)
 #define uop_FCOM(ir, dst_reg, src_reg_a, src_reg_b)              uop_gen_reg_dst_src2(UOP_FCOM, ir, dst_reg, src_reg_a, src_reg_b)
