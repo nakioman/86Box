@@ -64,8 +64,11 @@
 #define DA2_MASK_GAIJIRAM        0x3ffff       /* 0x3FFFF */
 #define DA2_MASK_VRAM            0xfffff       /* 0xFFFFF */
 #define DA2_MASK_VRAMPLANE       0x1ffff       /* 0x1FFFF */
-#define DA2_CLOCK_58MHZ          58000000.0    /* 58 MHz interlaced */
-#define DA2_CLOCK_45MHZ          45570000.0    /* 45.57 MHz interlaced */
+#define DA2_CLOCK_58MHZ          58000000.0    /* 58.000 MHz interlaced */
+#define DA2_CLOCK_45MHZ          45570000.0    /* 45.570 MHz interlaced */
+/* The DA-3 and later have the capability of monitor ID detection and 45.57/47.424 MHz OSCs.
+   They must be used for IBM 8515 monitor, but I don't know which OSC is used (or both). */
+
 #define DA2_BLT_MEMSIZE          0x10
 #define DA2_BLT_REGSIZE          0x40
 #define DA2_DEBUG_BLTLOG_SIZE    (DA2_BLT_REGSIZE + 1)
