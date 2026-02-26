@@ -2724,11 +2724,11 @@ const machine_t machines[] = {
         .kbc_p1                   = 0xff,
         .gpio                     = 0xffffffff,
         .gpio_acpi                = 0xffffffff,
-        .device                   = NULL,
+        .device                   = &ibm5550_device,
         .kbd_device               = NULL,
         .fdc_device               = NULL,
         .sio_device               = NULL,
-        .vid_device               = &ibm5550_vid_device,
+        .vid_device               = NULL,
         .snd_device               = NULL,
         .net_device               = NULL
     },
