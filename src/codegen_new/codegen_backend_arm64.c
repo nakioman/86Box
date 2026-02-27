@@ -46,6 +46,7 @@ void *codegen_fp_round_quad;
 
 void *codegen_gpf_rout;
 void *codegen_exit_rout;
+void *codegen_trampoline_entry;
 
 host_reg_def_t codegen_host_reg_list[CODEGEN_HOST_REGS] = {
     { REG_X19, 0},
@@ -331,6 +332,20 @@ codegen_backend_init(void)
     host_arm64_LDP_POSTIDX_X(block, REG_X29, REG_X30, REG_XSP, 16);
     host_arm64_RET(block, REG_X30);
 
+    /*Global trampoline entry: saves callee-saved regs once, loads cpu_state
+      pointer, then branches to the block body address passed in X0.
+      All per-block code shares this single prologue/epilogue pair.*/
+    codegen_alloc(block, 80);
+    codegen_trampoline_entry = &block_write_data[block_pos];
+    host_arm64_STP_PREIDX_X(block, REG_X29, REG_X30, REG_XSP, -16);
+    host_arm64_STP_PREIDX_X(block, REG_X27, REG_X28, REG_XSP, -16);
+    host_arm64_STP_PREIDX_X(block, REG_X25, REG_X26, REG_XSP, -16);
+    host_arm64_STP_PREIDX_X(block, REG_X23, REG_X24, REG_XSP, -16);
+    host_arm64_STP_PREIDX_X(block, REG_X21, REG_X22, REG_XSP, -16);
+    host_arm64_STP_PREIDX_X(block, REG_X19, REG_X20, REG_XSP, -64);
+    host_arm64_MOVX_IMM(block, REG_CPUSTATE, (uint64_t) &cpu_state);
+    host_arm64_BR(block, REG_X0);
+
     block_write_data = NULL;
 
     codegen_allocator_clean_blocks(block->head_mem_block);
@@ -347,23 +362,30 @@ codegen_set_rounding_mode(int mode)
     cpu_state.new_fp_control = mode << 3;
 }
 
-/*R10 - cpu_state*/
+/*Per-block entry code. The global trampoline (codegen_trampoline_entry) has
+  already saved callee-saved registers and loaded REG_CPUSTATE = &cpu_state.
+
+  Layout:
+    offset 0  (BLOCK_LINK_ENTRY): LDR W7,[X29,#cycles] / CMP / B.GT / B exit
+    offset 16 (BLOCK_BODY_ENTRY): FPU TOP setup (if needed), then block body
+
+  C dispatch enters at BLOCK_BODY_ENTRY (cycles already checked).
+  Linked blocks enter at BLOCK_LINK_ENTRY (includes cycle check).*/
 void
 codegen_backend_prologue(codeblock_t *block)
 {
+    uint32_t *exit_branch;
+    int       cycles_offset = (uintptr_t) &cpu_state._cycles - (uintptr_t) &cpu_state;
+
     block_pos = BLOCK_START;
 
-    /*Entry code*/
+    /*Link entry: cycle check (4 instructions = 16 bytes)*/
+    host_arm64_LDR_IMM_W(block, REG_TEMP, REG_CPUSTATE, cycles_offset);
+    host_arm64_CMP_IMM(block, REG_TEMP, 0);
+    exit_branch = host_arm64_BLE_(block);
+    host_arm64_branch_set_offset(exit_branch, codegen_exit_rout);
 
-    host_arm64_STP_PREIDX_X(block, REG_X29, REG_X30, REG_XSP, -16);
-    host_arm64_STP_PREIDX_X(block, REG_X27, REG_X28, REG_XSP, -16);
-    host_arm64_STP_PREIDX_X(block, REG_X25, REG_X26, REG_XSP, -16);
-    host_arm64_STP_PREIDX_X(block, REG_X23, REG_X24, REG_XSP, -16);
-    host_arm64_STP_PREIDX_X(block, REG_X21, REG_X22, REG_XSP, -16);
-    host_arm64_STP_PREIDX_X(block, REG_X19, REG_X20, REG_XSP, -64);
-
-    host_arm64_MOVX_IMM(block, REG_CPUSTATE, (uint64_t) &cpu_state);
-
+    /*Body entry at offset 16 (BLOCK_BODY_ENTRY)*/
     if (block->flags & CODEBLOCK_HAS_FPU) {
         host_arm64_LDR_IMM_W(block, REG_TEMP, REG_CPUSTATE, (uintptr_t) &cpu_state.TOP - (uintptr_t) &cpu_state);
         host_arm64_SUB_IMM(block, REG_TEMP, REG_TEMP, block->TOP);
@@ -374,13 +396,11 @@ codegen_backend_prologue(codeblock_t *block)
 void
 codegen_backend_epilogue(codeblock_t *block)
 {
-    host_arm64_LDP_POSTIDX_X(block, REG_X19, REG_X20, REG_XSP, 64);
-    host_arm64_LDP_POSTIDX_X(block, REG_X21, REG_X22, REG_XSP, 16);
-    host_arm64_LDP_POSTIDX_X(block, REG_X23, REG_X24, REG_XSP, 16);
-    host_arm64_LDP_POSTIDX_X(block, REG_X25, REG_X26, REG_XSP, 16);
-    host_arm64_LDP_POSTIDX_X(block, REG_X27, REG_X28, REG_XSP, 16);
-    host_arm64_LDP_POSTIDX_X(block, REG_X29, REG_X30, REG_XSP, 16);
-    host_arm64_RET(block, REG_X30);
+    /*Emit a single patchable B to codegen_exit_rout. Direct block linking
+      will later patch this to jump to the next block's BLOCK_LINK_ENTRY.*/
+    block->exit_patch_addr = (uint32_t *) &block_write_data[block_pos];
+    host_arm64_B(block, codegen_exit_rout);
+    block->flags |= CODEBLOCK_LINKABLE;
 
     codegen_allocator_clean_blocks(block->head_mem_block);
 }

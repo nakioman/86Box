@@ -57,6 +57,15 @@ typedef struct codeblock_t {
     /*First mem_block_t used by this block. Any subsequent mem_block_ts
       will be in the list starting at head_mem_block->next.*/
     struct mem_block_t *head_mem_block;
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+    /*Direct block linking fields (ARM64 only)*/
+    uint32_t  next_pc;              /* Fall-through PC (cs+pc at block end) */
+    uint32_t *exit_patch_addr;      /* Address of patchable B instruction in epilogue */
+    uint16_t  link_target;          /* Block index we're linked TO (0 = unlinked) */
+    uint16_t  incoming_link_head;   /* Head of incoming link list (blocks that jump to us) */
+    uint16_t  incoming_link_next;   /* Next in incoming link list (per-block, for source blocks) */
+#endif
 } codeblock_t;
 
 extern codeblock_t *codeblock;
@@ -83,6 +92,8 @@ extern uint8_t *block_write_data;
 #define CODEBLOCK_NO_IMMEDIATES 0x80
 /*Code block is on a rapidly-modified page; skip codegen and use interpreter only*/
 #define CODEBLOCK_HOT_SMC 0x100
+/*Code block has a patchable exit stub suitable for direct block linking (ARM64)*/
+#define CODEBLOCK_LINKABLE 0x200
 
 #define BLOCK_PC_INVALID        0xffffffff
 
@@ -381,6 +392,11 @@ void codegen_set_loop_start(struct ir_data_t *ir, int first_instruction);
 
 #ifdef DEBUG_EXTRA
 extern uint32_t instr_counts[256 * 256];
+#endif
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+extern void codegen_try_link(uint16_t source_nr, uint16_t target_nr);
+extern void codegen_unlink_block(codeblock_t *block);
 #endif
 
 #endif
