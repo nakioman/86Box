@@ -548,8 +548,10 @@ exec386_dynarec_dyn(void)
         uint16_t current_block_nr = get_block_nr(block);
 
         /*Try to link the previous block to this one*/
+#        if 0 /* Disabled for debugging - test trampoline without linking */
         if (prev_block_nr)
             codegen_try_link(prev_block_nr, current_block_nr);
+#        endif
 
         /*Execute via trampoline: saves callee-saved regs once,
           enters block at BLOCK_BODY_ENTRY (skipping cycle check)*/
@@ -560,9 +562,11 @@ exec386_dynarec_dyn(void)
 #        endif
         inrecomp = 0;
 
+#        if 0 /* Disabled for debugging - test trampoline without linking */
         /*Record this block as a link source for the next iteration*/
         if (block->flags & CODEBLOCK_LINKABLE)
             last_block_nr = current_block_nr;
+#        endif
 #    else /* x86-64 path */
         void (*code)(void) = (void *) &block->data[BLOCK_START];
 
