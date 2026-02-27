@@ -329,6 +329,12 @@ extern void codegen_delete_random_block(int required_mem_block);
 extern int      cpu_block_end;
 extern uint32_t codegen_endpc;
 
+#if defined(__aarch64__) || defined(_M_ARM64)
+/*Fall-through PC from the last recomp function in codegen_generate_call.
+  Used to set block->next_pc correctly for direct block linking.*/
+extern uint32_t codegen_block_exit_pc;
+#endif
+
 extern int cpu_reps;
 extern int cpu_notreps;
 

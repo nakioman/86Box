@@ -78,6 +78,14 @@ codegen_timing_set(codegen_timing_t *timing)
 
 int codegen_in_recompile;
 
+#if defined(__aarch64__) || defined(_M_ARM64)
+/*Tracks the fall-through PC computed by the last recomp function in
+  codegen_generate_call. Used by codegen_block_end_recompile to set
+  block->next_pc correctly for direct block linking, since the
+  interpreter may have taken a different branch path.*/
+uint32_t codegen_block_exit_pc;
+#endif
+
 static int      last_op_ssegs;
 static x86seg  *last_op_ea_seg;
 static uint32_t last_op_32;
@@ -398,6 +406,9 @@ codegen_generate_call(uint8_t opcode, OpFn op, uint32_t fetchdat, uint32_t new_p
     int          in_lock            = 0;
     uint32_t     next_pc            = 0;
     uint16_t     op87               = 0x0000;
+#if defined(__aarch64__) || defined(_M_ARM64)
+    codegen_block_exit_pc = 0;
+#endif
 #ifdef DEBUG_EXTRA
     uint8_t last_prefix = 0;
 #endif
@@ -684,6 +695,9 @@ generate_call:
         if (new_pc) {
             if (new_pc != -1)
                 uop_MOV_IMM(ir, IREG_pc, new_pc);
+#if defined(__aarch64__) || defined(_M_ARM64)
+            codegen_block_exit_pc = (new_pc != -1) ? new_pc : 0;
+#endif
 
             codegen_endpc = (cs + cpu_state.pc) + 8;
 

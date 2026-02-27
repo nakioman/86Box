@@ -886,7 +886,13 @@ void
 codegen_block_end_recompile(codeblock_t *block)
 {
 #if defined(__aarch64__) || defined(_M_ARM64)
-    block->next_pc = cs + cpu_state.pc;
+    /*Use the fall-through PC from codegen rather than cpu_state.pc.
+      The interpreter may have taken a branch, making cpu_state.pc point
+      to the branch target, but the epilogue B is only reached on the
+      fall-through (not-taken) path.*/
+    block->next_pc = (codegen_block_exit_pc != 0)
+                   ? (cs + codegen_block_exit_pc)
+                   : (cs + cpu_state.pc);
 #endif
     codegen_timing_block_end();
     codegen_accumulate(ir_data, ACCREG_cycles, -codegen_block_cycles);

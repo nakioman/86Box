@@ -397,10 +397,13 @@ void
 codegen_backend_epilogue(codeblock_t *block)
 {
     /*Emit a single patchable B to codegen_exit_rout. Direct block linking
-      will later patch this to jump to the next block's BLOCK_LINK_ENTRY.*/
+      will later patch this to jump to the next block's BLOCK_LINK_ENTRY.
+      Only mark as linkable if we have a reliable fall-through PC from
+      the codegen (codegen_block_exit_pc != 0).*/
     block->exit_patch_addr = (uint32_t *) &block_write_data[block_pos];
     host_arm64_B(block, codegen_exit_rout);
-    block->flags |= CODEBLOCK_LINKABLE;
+    if (codegen_block_exit_pc != 0)
+        block->flags |= CODEBLOCK_LINKABLE;
 
     codegen_allocator_clean_blocks(block->head_mem_block);
 }
