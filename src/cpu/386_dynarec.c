@@ -865,6 +865,9 @@ exec386_dynarec(int32_t cycs)
 #    endif
                     }
                 }
+#    if defined(__aarch64__) || defined(_M_ARM64)
+                last_block_nr = 0;
+#    endif
             }
 
             if (new_ne) {
@@ -874,11 +877,17 @@ exec386_dynarec(int32_t cycs)
                 cpu_state.oldpc = cpu_state.pc;
                 new_ne = 0;
                 x86_int(16);
+#    if defined(__aarch64__) || defined(_M_ARM64)
+                last_block_nr = 0;
+#    endif
             }
 
-            if (smi_line)
+            if (smi_line) {
                 enter_smm_check(0);
-            else if (nmi && nmi_enable && nmi_mask) {
+#    if defined(__aarch64__) || defined(_M_ARM64)
+                last_block_nr = 0;
+#    endif
+            } else if (nmi && nmi_enable && nmi_mask) {
 #    ifndef USE_NEW_DYNAREC
                 oldcs = CS;
 #    endif
@@ -893,6 +902,9 @@ exec386_dynarec(int32_t cycs)
 #    else
                 nmi = 0;
 #    endif
+#    if defined(__aarch64__) || defined(_M_ARM64)
+                last_block_nr = 0;
+#    endif
             } else if ((cpu_state.flags & I_FLAG) && pic.int_pending) {
                 vector = picinterrupt();
                 if (vector != -1) {
@@ -901,6 +913,9 @@ exec386_dynarec(int32_t cycs)
 #    endif
                     cpu_state.oldpc = cpu_state.pc;
                     x86_int(vector);
+#    if defined(__aarch64__) || defined(_M_ARM64)
+                    last_block_nr = 0;
+#    endif
                 }
             }
 

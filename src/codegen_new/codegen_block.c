@@ -241,6 +241,8 @@ codegen_try_link(uint16_t source_nr, uint16_t target_nr)
     /*Validate linking rules*/
     if (!(source->flags & CODEBLOCK_LINKABLE) || !source->exit_patch_addr)
         return;
+    if (!source->head_mem_block)
+        return; /*Source's code has been freed (invalidated)*/
     if (source->link_target)
         return; /*Already linked*/
     if (source->next_pc != target->pc)
@@ -492,6 +494,11 @@ invalidate_block(codeblock_t *block)
     if (block->head_mem_block)
         codegen_allocator_free(block->head_mem_block);
     block->head_mem_block = NULL;
+#if defined(__aarch64__) || defined(_M_ARM64)
+    /*Clear link metadata since code memory is now freed*/
+    block->exit_patch_addr = NULL;
+    block->flags &= ~CODEBLOCK_LINKABLE;
+#endif
 }
 
 static void
