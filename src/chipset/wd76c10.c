@@ -1051,6 +1051,10 @@ wd76c10_outb(uint16_t port, uint8_t val, void *priv)
             if (valxor)
                 nvr_lock_set(0x38, 0x08, (val & 0x08) ? 0x03 : 0x00, dev->nvr);
             break;
+
+        case 0xf073:
+            dev->locked = ((val & 0x00ff) != 0x00da);
+            break;
     }
 }
 
@@ -1460,7 +1464,7 @@ wd76c10_init(UNUSED(const device_t *info))
     io_sethandler(0xe872, 1, NULL, wd76c10_inw, NULL, NULL, wd76c10_outw, NULL, dev);
 
     /* Lock/Unlock Configuration */
-    io_sethandler(0xf073, 1, NULL, NULL, NULL, NULL, wd76c10_outw, NULL, dev);
+    io_sethandler(0xf073, 1, NULL, NULL, NULL, wd76c10_outb, wd76c10_outw, NULL, dev);
 
     /* Cache Flush */
     io_sethandler(0xf872, 1, NULL, NULL, NULL, NULL, wd76c10_outw, NULL, dev);
