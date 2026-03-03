@@ -57,6 +57,10 @@ int inrecomp                = 0;
 int cpu_block_end           = 0;
 int cpu_end_block_after_ins = 0;
 
+#if defined(__aarch64__) || defined(_M_ARM64)
+static uint16_t last_block_nr = 0;
+#endif
+
 #ifdef ENABLE_386_DYNAREC_LOG
 int x386_dynarec_do_log = ENABLE_386_DYNAREC_LOG;
 
@@ -403,6 +407,14 @@ exec386_dynarec_dyn(void)
     codeblock_t *block = codeblock_hash[hash];
 #    endif
     int valid_block = 0;
+#    if defined(__aarch64__) || defined(_M_ARM64)
+    /*Save and clear last_block_nr. The saved value is used for linking
+      if this iteration executes a compiled block. Clearing ensures that
+      all non-execution paths (recompile, mark, interpreter, etc.) don't
+      leave a stale value for the next iteration.*/
+    uint16_t prev_block_nr = last_block_nr;
+    last_block_nr = 0;
+#    endif
 
 #    ifdef USE_NEW_DYNAREC
     if (!cpu_state.abrt)
@@ -515,6 +527,9 @@ exec386_dynarec_dyn(void)
             /* FPU top-of-stack does not match the value this block was compiled
                with, re-compile using dynamic top-of-stack*/
 #    ifdef USE_NEW_DYNAREC
+#        if defined(__aarch64__) || defined(_M_ARM64)
+            codegen_unlink_block(block);
+#        endif
             block->flags &= ~(CODEBLOCK_STATIC_TOP | CODEBLOCK_WAS_RECOMPILED);
 #    else
             block->flags &= ~CODEBLOCK_STATIC_TOP;
@@ -529,22 +544,59 @@ exec386_dynarec_dyn(void)
     if (valid_block && block->was_recompiled)
 #    endif
     {
-        void (*code)(void) = (void *) &block->data[BLOCK_START];
+#    if defined(__aarch64__) || defined(_M_ARM64)
+        uint16_t current_block_nr = get_block_nr(block);
 
-#    ifndef USE_NEW_DYNAREC
-        codeblock_hash[hash] = block;
-#    endif
+        /*Try to link the previous block to this one*/
+        if (prev_block_nr)
+            codegen_try_link(prev_block_nr, current_block_nr);
+
+        /*Cap cycles budget so linked chains exit before the next timer event.
+          Without this, a long chain could delay timer_process() and starve
+          hardware devices (IDE, PIC, etc.) that depend on timer callbacks.*/
+        int32_t orig_cycles = cycles;
+        {
+            int64_t timer_remain = (int64_t) (timer_target - tsc);
+            if (timer_remain > 0 && timer_remain < (int64_t) cycles)
+                cycles = (int32_t) timer_remain;
+        }
+        int32_t capped_cycles = cycles;
+
+        /*Execute via trampoline: saves callee-saved regs once,
+          enters block at BLOCK_BODY_ENTRY (skipping cycle check)*/
         inrecomp = 1;
-        code();
-#    ifdef USE_ACYCS
+        ((void (*)(void *)) codegen_trampoline_entry)(&block->data[BLOCK_BODY_ENTRY]);
+#        ifdef USE_ACYCS
         acycs = 0;
-#    endif
+#        endif
         inrecomp = 0;
 
-#    ifndef USE_NEW_DYNAREC
+        /*Restore the hidden budget that was removed by the timer cap.
+          The outer loop computes cycdiff = oldcyc - cycles, so this
+          ensures only the cycles actually consumed are counted.*/
+        cycles += (orig_cycles - capped_cycles);
+
+        /*Record this block as a link source for the next iteration*/
+        if (block->flags & CODEBLOCK_LINKABLE)
+            last_block_nr = current_block_nr;
+#    else /* x86-64 path */
+        void (*code)(void) = (void *) &block->data[BLOCK_START];
+
+#        ifndef USE_NEW_DYNAREC
+        codeblock_hash[hash] = block;
+#        endif
+        inrecomp = 1;
+        code();
+#        ifdef USE_ACYCS
+        acycs = 0;
+#        endif
+        inrecomp = 0;
+
+#        ifndef USE_NEW_DYNAREC
         if (!use32)
             cpu_state.pc &= 0xffff;
-#    endif
+#        endif
+#    endif /* __aarch64__ */
     } else if (valid_block && !cpu_state.abrt) {
 #    ifdef USE_NEW_DYNAREC
         start_pc                 = cs + cpu_state.pc;
@@ -792,6 +844,9 @@ exec386_dynarec(int32_t cycs)
             tsc_old          = tsc;
             if (cpu_force_interpreter || cpu_override_dynarec ||  (!CACHE_ON())) /*Interpret block*/
             {
+#    if defined(__aarch64__) || defined(_M_ARM64)
+                last_block_nr = 0;
+#    endif
                 exec386_dynarec_int();
             } else {
                 exec386_dynarec_dyn();
@@ -800,6 +855,9 @@ exec386_dynarec(int32_t cycs)
             if (cpu_init) {
                 cpu_init = 0;
                 resetx86();
+#    if defined(__aarch64__) || defined(_M_ARM64)
+                last_block_nr = 0;
+#    endif
             }
 
             if (cpu_state.abrt) {
@@ -823,6 +881,9 @@ exec386_dynarec(int32_t cycs)
 #    endif
                     }
                 }
+#    if defined(__aarch64__) || defined(_M_ARM64)
+                last_block_nr = 0;
+#    endif
             }
 
             if (new_ne) {
@@ -832,11 +893,17 @@ exec386_dynarec(int32_t cycs)
                 cpu_state.oldpc = cpu_state.pc;
                 new_ne = 0;
                 x86_int(16);
+#    if defined(__aarch64__) || defined(_M_ARM64)
+                last_block_nr = 0;
+#    endif
             }
 
-            if (smi_line)
+            if (smi_line) {
                 enter_smm_check(0);
-            else if (nmi && nmi_enable && nmi_mask) {
+#    if defined(__aarch64__) || defined(_M_ARM64)
+                last_block_nr = 0;
+#    endif
+            } else if (nmi && nmi_enable && nmi_mask) {
 #    ifndef USE_NEW_DYNAREC
                 oldcs = CS;
 #    endif
@@ -851,6 +918,9 @@ exec386_dynarec(int32_t cycs)
 #    else
                 nmi = 0;
 #    endif
+#    if defined(__aarch64__) || defined(_M_ARM64)
+                last_block_nr = 0;
+#    endif
             } else if ((cpu_state.flags & I_FLAG) && pic.int_pending) {
                 vector = picinterrupt();
                 if (vector != -1) {
@@ -859,6 +929,9 @@ exec386_dynarec(int32_t cycs)
 #    endif
                     cpu_state.oldpc = cpu_state.pc;
                     x86_int(vector);
+#    if defined(__aarch64__) || defined(_M_ARM64)
+                    last_block_nr = 0;
+#    endif
                 }
             }
 
