@@ -85,6 +85,18 @@ block_free_list_add(codeblock_t *block)
         block->next = 0;
     block_free_list = get_block_nr(block);
     block->flags    = CODEBLOCK_IN_FREE_LIST;
+#if defined(__aarch64__) || defined(_M_ARM64)
+    block->next_pc                 = 0;
+    block->exit_patch_addr         = NULL;
+    block->link_target             = 0;
+    block->incoming_link_head      = 0;
+    block->incoming_link_next      = 0;
+    block->next_pc_taken           = 0;
+    block->exit_patch_addr_taken   = NULL;
+    block->link_target_taken       = 0;
+    block->incoming_link_head_taken = 0;
+    block->incoming_link_next_taken = 0;
+#endif
 }
 
 static void
@@ -159,6 +171,146 @@ block_dirty_list_remove(codeblock_t *block)
 #endif
     block->flags &= ~CODEBLOCK_IN_DIRTY_LIST;
 }
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+/*ARM64 direct block linking.
+
+  When block A's fall-through PC matches block B's entry PC, we patch
+  A's epilogue B instruction from "B codegen_exit_rout" to
+  "B block_B + BLOCK_LINK_ENTRY", avoiding the C dispatch overhead.
+
+  Each linked block maintains a singly-linked list of incoming links
+  (blocks that jump TO it), so that invalidation can unpatch all sources.*/
+
+#    define ARM64_OPCODE_B 0x14000000u
+
+static inline uint32_t
+arm64_encode_b(void *from, void *to)
+{
+    int32_t offset = (int32_t) ((uintptr_t) to - (uintptr_t) from);
+    return ARM64_OPCODE_B | (uint32_t) ((offset >> 2) & 0x03ffffff);
+}
+
+static void
+codegen_remove_incoming_link(codeblock_t *target, uint16_t source_nr)
+{
+    uint16_t *pp = &target->incoming_link_head;
+    while (*pp) {
+        codeblock_t *cur = &codeblock[*pp];
+        if (*pp == source_nr) {
+            *pp = cur->incoming_link_next;
+            cur->incoming_link_next = 0;
+            return;
+        }
+        pp = &cur->incoming_link_next;
+    }
+}
+
+static void
+codegen_remove_incoming_link_taken(codeblock_t *target, uint16_t source_nr)
+{
+    uint16_t *pp = &target->incoming_link_head_taken;
+    while (*pp) {
+        codeblock_t *cur = &codeblock[*pp];
+        if (*pp == source_nr) {
+            *pp = cur->incoming_link_next_taken;
+            cur->incoming_link_next_taken = 0;
+            return;
+        }
+        pp = &cur->incoming_link_next_taken;
+    }
+}
+
+static inline void
+codegen_patch_exit(uint32_t *patch_addr, void *dest)
+{
+    *patch_addr = arm64_encode_b(patch_addr, dest);
+    __builtin___clear_cache((char *) patch_addr, (char *) patch_addr + 4);
+}
+
+void
+codegen_unlink_block(codeblock_t *block)
+{
+    uint16_t block_nr = get_block_nr(block);
+
+    /*Remove outgoing fall-through link*/
+    if (block->link_target) {
+        codeblock_t *target = &codeblock[block->link_target];
+        codegen_remove_incoming_link(target, block_nr);
+        if (block->exit_patch_addr)
+            codegen_patch_exit(block->exit_patch_addr, codegen_exit_rout);
+        block->link_target = 0;
+    }
+
+    /*Remove outgoing branch-exit link*/
+    if (block->link_target_taken) {
+        codeblock_t *target = &codeblock[block->link_target_taken];
+        codegen_remove_incoming_link_taken(target, block_nr);
+        if (block->exit_patch_addr_taken)
+            codegen_patch_exit(block->exit_patch_addr_taken, codegen_exit_rout);
+        block->link_target_taken = 0;
+    }
+
+    /*Remove all incoming fall-through links*/
+    while (block->incoming_link_head) {
+        codeblock_t *source       = &codeblock[block->incoming_link_head];
+        block->incoming_link_head = source->incoming_link_next;
+        source->incoming_link_next = 0;
+        if (source->exit_patch_addr)
+            codegen_patch_exit(source->exit_patch_addr, codegen_exit_rout);
+        source->link_target = 0;
+    }
+
+    /*Remove all incoming branch-exit links*/
+    while (block->incoming_link_head_taken) {
+        codeblock_t *source             = &codeblock[block->incoming_link_head_taken];
+        block->incoming_link_head_taken = source->incoming_link_next_taken;
+        source->incoming_link_next_taken = 0;
+        if (source->exit_patch_addr_taken)
+            codegen_patch_exit(source->exit_patch_addr_taken, codegen_exit_rout);
+        source->link_target_taken = 0;
+    }
+}
+
+void
+codegen_try_link(uint16_t source_nr, uint16_t target_nr)
+{
+    codeblock_t *source = &codeblock[source_nr];
+    codeblock_t *target = &codeblock[target_nr];
+
+    /*Common validation*/
+    if (!source->head_mem_block)
+        return; /*Source's code has been freed (invalidated)*/
+    if (!(target->flags & CODEBLOCK_WAS_RECOMPILED))
+        return; /*Target not compiled*/
+    if ((target->flags & CODEBLOCK_STATIC_TOP) && (target->flags & CODEBLOCK_HAS_FPU))
+        return; /*FPU static-top blocks need TOP validation in C dispatch*/
+    if (target->pc == BLOCK_PC_INVALID)
+        return;
+
+    /*Try fall-through linking (epilogue exit).
+      Self-links are safe: LINK_ENTRY cycle check ensures termination.*/
+    if ((source->flags & CODEBLOCK_LINKABLE) && source->exit_patch_addr
+        && !source->link_target
+        && source->next_pc == target->pc) {
+        codegen_patch_exit(source->exit_patch_addr, &target->data[BLOCK_LINK_ENTRY]);
+        source->link_target        = target_nr;
+        source->incoming_link_next = target->incoming_link_head;
+        target->incoming_link_head = source_nr;
+    }
+
+    /*Try branch-exit linking (taken path)*/
+    if (source->exit_patch_addr_taken
+        && !source->link_target_taken
+        && source->next_pc_taken != 0
+        && source->next_pc_taken == target->pc) {
+        codegen_patch_exit(source->exit_patch_addr_taken, &target->data[BLOCK_LINK_ENTRY]);
+        source->link_target_taken        = target_nr;
+        source->incoming_link_next_taken = target->incoming_link_head_taken;
+        target->incoming_link_head_taken = source_nr;
+    }
+}
+#endif /* __aarch64__ || _M_ARM64 */
 
 int
 codegen_purge_purgable_list(void)
@@ -377,17 +529,30 @@ invalidate_block(codeblock_t *block)
     if (block->pc == BLOCK_PC_INVALID)
         fatal("Invalidating deleted block\n");
 #endif
+#if defined(__aarch64__) || defined(_M_ARM64)
+    codegen_unlink_block(block);
+#endif
     remove_from_block_list(block, old_pc);
     block_dirty_list_add(block);
     if (block->head_mem_block)
         codegen_allocator_free(block->head_mem_block);
     block->head_mem_block = NULL;
+#if defined(__aarch64__) || defined(_M_ARM64)
+    /*Clear link metadata since code memory is now freed*/
+    block->exit_patch_addr = NULL;
+    block->exit_patch_addr_taken = NULL;
+    block->flags &= ~CODEBLOCK_LINKABLE;
+#endif
 }
 
 static void
 delete_block(codeblock_t *block)
 {
     uint32_t old_pc = block->pc;
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+    codegen_unlink_block(block);
+#endif
 
     if (block == &codeblock[codeblock_hash[HASH(block->phys)]])
         codeblock_hash[HASH(block->phys)] = BLOCK_INVALID;
@@ -547,6 +712,10 @@ void
 codegen_block_start_recompile(codeblock_t *block)
 {
     page_t *page = &pages[block->phys >> 12];
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+    codegen_unlink_block(block);
+#endif
 
     if (!page->block)
         mem_flush_write_page(block->phys, cs + cpu_state.pc);
@@ -757,6 +926,10 @@ codegen_block_end(void)
 {
     codeblock_t *block = &codeblock[block_current];
 
+#if defined(__aarch64__) || defined(_M_ARM64)
+    block->next_pc = cs + cpu_state.pc;
+    block->next_pc_taken = 0;
+#endif
     codegen_block_generate_end_mask_mark();
     add_to_block_list(block);
 }
@@ -764,6 +937,21 @@ codegen_block_end(void)
 void
 codegen_block_end_recompile(codeblock_t *block)
 {
+#if defined(__aarch64__) || defined(_M_ARM64)
+    /*Use the fall-through PC from codegen rather than cpu_state.pc.
+      The interpreter may have taken a branch, making cpu_state.pc point
+      to the branch target, but the epilogue B is only reached on the
+      fall-through (not-taken) path.*/
+    block->next_pc = (codegen_block_exit_pc != 0)
+                   ? (cs + codegen_block_exit_pc)
+                   : (cs + cpu_state.pc);
+    /*Branch-exit PC: the target of the conditional/unconditional branch.
+      Set by the ropJ macro when a branch instruction emits a taken-path
+      exit via uop_JMP. Zero if no branch exit was generated.*/
+    block->next_pc_taken = (codegen_block_branch_exit_pc != 0)
+                         ? (cs + codegen_block_branch_exit_pc)
+                         : 0;
+#endif
     codegen_timing_block_end();
     codegen_accumulate(ir_data, ACCREG_cycles, -codegen_block_cycles);
 

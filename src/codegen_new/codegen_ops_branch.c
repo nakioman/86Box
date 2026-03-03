@@ -810,6 +810,7 @@ ropJNLE_common(codeblock_t *block, ir_data_t *ir, uint32_t dest_addr, uint32_t n
         ret = ropJ##cond##_common(block, ir, dest_addr, op_pc + 1);     \
                                                                         \
         codegen_mark_code_present(block, cs + op_pc, 1);                \
+        CODEGEN_SET_BRANCH_EXIT_PC(ret, dest_addr, op_pc + 1);         \
         return ret ? dest_addr : (op_pc + 1);                           \
     }                                                                   \
     uint32_t ropJ##cond##_16(codeblock_t *block,                        \
@@ -826,6 +827,7 @@ ropJNLE_common(codeblock_t *block, ir_data_t *ir, uint32_t dest_addr, uint32_t n
         ret = ropJ##cond##_common(block, ir, dest_addr, op_pc + 2);     \
                                                                         \
         codegen_mark_code_present(block, cs + op_pc, 2);                \
+        CODEGEN_SET_BRANCH_EXIT_PC(ret, dest_addr, op_pc + 2);         \
         return ret ? dest_addr : (op_pc + 2);                           \
     }                                                                   \
     uint32_t ropJ##cond##_32(codeblock_t *block,                        \
@@ -842,6 +844,7 @@ ropJNLE_common(codeblock_t *block, ir_data_t *ir, uint32_t dest_addr, uint32_t n
         ret = ropJ##cond##_common(block, ir, dest_addr, op_pc + 4);     \
                                                                         \
         codegen_mark_code_present(block, cs + op_pc, 4);                \
+        CODEGEN_SET_BRANCH_EXIT_PC(ret, dest_addr, op_pc + 4);         \
         return ret ? dest_addr : (op_pc + 4);                           \
     }
 
@@ -883,6 +886,9 @@ ropJCXZ(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), UNUSED(uint32
     uop_set_jump_dest(ir, jump_uop);
 
     codegen_mark_code_present(block, cs + op_pc, 1);
+#if defined(__aarch64__) || defined(_M_ARM64)
+    codegen_block_branch_exit_pc = dest_addr;
+#endif
     return op_pc + 1;
 }
 
@@ -907,6 +913,9 @@ ropLOOP(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), UNUSED(uint32
         }
         uop_MOV_IMM(ir, IREG_pc, op_pc + 1);
         ret_addr = dest_addr;
+#if defined(__aarch64__) || defined(_M_ARM64)
+        codegen_block_branch_exit_pc = op_pc + 1;
+#endif
         CPU_BLOCK_END();
     } else {
         if (op_32 & 0x200) {
@@ -918,6 +927,9 @@ ropLOOP(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), UNUSED(uint32
         }
         uop_MOV_IMM(ir, IREG_pc, dest_addr);
         ret_addr = op_pc + 1;
+#if defined(__aarch64__) || defined(_M_ARM64)
+        codegen_block_branch_exit_pc = dest_addr;
+#endif
     }
     uop_JMP(ir, codegen_exit_rout);
     uop_set_jump_dest(ir, jump_uop);
@@ -957,6 +969,9 @@ ropLOOPE(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), UNUSED(uint3
     uop_set_jump_dest(ir, jump_uop2);
 
     codegen_mark_code_present(block, cs + op_pc, 1);
+#if defined(__aarch64__) || defined(_M_ARM64)
+    codegen_block_branch_exit_pc = dest_addr;
+#endif
     return op_pc + 1;
 }
 uint32_t
@@ -990,5 +1005,8 @@ ropLOOPNE(codeblock_t *block, ir_data_t *ir, UNUSED(uint8_t opcode), UNUSED(uint
     uop_set_jump_dest(ir, jump_uop2);
 
     codegen_mark_code_present(block, cs + op_pc, 1);
+#if defined(__aarch64__) || defined(_M_ARM64)
+    codegen_block_branch_exit_pc = dest_addr;
+#endif
     return op_pc + 1;
 }

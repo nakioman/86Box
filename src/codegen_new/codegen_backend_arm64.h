@@ -4,6 +4,14 @@
 #define BLOCK_MASK  0x3fff
 #define BLOCK_START 0
 
+/*Direct block linking entry points within each block's generated code.
+  BLOCK_LINK_ENTRY (offset 0): cycle check followed by body - used by linked jumps.
+  BLOCK_BODY_ENTRY (offset 16): body entry, skips cycle check - used by C dispatch. */
+#define BLOCK_LINK_ENTRY 0
+#define BLOCK_BODY_ENTRY 16
+
+extern void *codegen_trampoline_entry;
+
 #define HASH_SIZE   0x20000
 #define HASH_MASK   0x1ffff
 

@@ -881,7 +881,15 @@ codegen_MMX_ENTER(codeblock_t *block, uop_t *uop)
 static int
 codegen_JMP(codeblock_t *block, uop_t *uop)
 {
-    host_arm64_jump(block, (uintptr_t) uop->p);
+    if (uop->p == codegen_exit_rout && codegen_block_branch_exit_pc != 0) {
+        /*Branch-exit path: emit a single patchable B instruction instead of
+          MOV+BR. This saves 2 instructions and makes the exit patchable for
+          direct block linking (taken-path linking for conditional branches).*/
+        block->exit_patch_addr_taken = (uint32_t *) &block_write_data[block_pos];
+        host_arm64_B(block, codegen_exit_rout);
+    } else {
+        host_arm64_jump(block, (uintptr_t) uop->p);
+    }
 
     return 0;
 }
