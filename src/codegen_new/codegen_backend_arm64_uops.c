@@ -2717,19 +2717,31 @@ codegen_SAR_IMM(codeblock_t *block, uop_t *uop)
     if (REG_IS_L(dest_size) && REG_IS_L(src_size)) {
         host_arm64_MOV_REG_ASR(block, dest_reg, src_reg, uop->imm_data);
     } else if (REG_IS_W(dest_size) && REG_IS_W(src_size)) {
-        host_arm64_MOV_REG(block, REG_TEMP, src_reg, 16);
-        host_arm64_MOV_REG_ASR(block, REG_TEMP, REG_TEMP, uop->imm_data);
-        host_arm64_UBFX(block, REG_TEMP, REG_TEMP, 16, 16);
+        if (uop->imm_data > 0 && uop->imm_data < 16) {
+            host_arm64_SBFX(block, REG_TEMP, src_reg, uop->imm_data, 16 - uop->imm_data);
+        } else {
+            host_arm64_MOV_REG(block, REG_TEMP, src_reg, 16);
+            host_arm64_MOV_REG_ASR(block, REG_TEMP, REG_TEMP, uop->imm_data);
+            host_arm64_UBFX(block, REG_TEMP, REG_TEMP, 16, 16);
+        }
         host_arm64_BFI(block, dest_reg, REG_TEMP, 0, 16);
     } else if (REG_IS_B(dest_size) && REG_IS_B(src_size)) {
-        host_arm64_MOV_REG(block, REG_TEMP, src_reg, 24);
-        host_arm64_MOV_REG_ASR(block, REG_TEMP, REG_TEMP, uop->imm_data);
-        host_arm64_UBFX(block, REG_TEMP, REG_TEMP, 24, 8);
+        if (uop->imm_data > 0 && uop->imm_data < 8) {
+            host_arm64_SBFX(block, REG_TEMP, src_reg, uop->imm_data, 8 - uop->imm_data);
+        } else {
+            host_arm64_MOV_REG(block, REG_TEMP, src_reg, 24);
+            host_arm64_MOV_REG_ASR(block, REG_TEMP, REG_TEMP, uop->imm_data);
+            host_arm64_UBFX(block, REG_TEMP, REG_TEMP, 24, 8);
+        }
         host_arm64_BFI(block, dest_reg, REG_TEMP, 0, 8);
     } else if (REG_IS_BH(dest_size) && REG_IS_BH(src_size)) {
-        host_arm64_MOV_REG(block, REG_TEMP, src_reg, 16);
-        host_arm64_MOV_REG_ASR(block, REG_TEMP, REG_TEMP, uop->imm_data);
-        host_arm64_UBFX(block, REG_TEMP, REG_TEMP, 24, 8);
+        if (uop->imm_data > 0 && uop->imm_data < 8) {
+            host_arm64_SBFX(block, REG_TEMP, src_reg, 8 + uop->imm_data, 8 - uop->imm_data);
+        } else {
+            host_arm64_MOV_REG(block, REG_TEMP, src_reg, 16);
+            host_arm64_MOV_REG_ASR(block, REG_TEMP, REG_TEMP, uop->imm_data);
+            host_arm64_UBFX(block, REG_TEMP, REG_TEMP, 24, 8);
+        }
         host_arm64_BFI(block, dest_reg, REG_TEMP, 8, 8);
     } else
         fatal("SAR_IMM %02x %02x\n", uop->dest_reg_a_real, uop->src_reg_a_real);
@@ -2826,16 +2838,28 @@ codegen_SHR_IMM(codeblock_t *block, uop_t *uop)
     if (REG_IS_L(dest_size) && REG_IS_L(src_size)) {
         host_arm64_MOV_REG_LSR(block, dest_reg, src_reg, uop->imm_data);
     } else if (REG_IS_W(dest_size) && REG_IS_W(src_size)) {
-        host_arm64_AND_IMM(block, REG_TEMP, src_reg, 0xffff);
-        host_arm64_MOV_REG_LSR(block, REG_TEMP, REG_TEMP, uop->imm_data);
+        if (uop->imm_data > 0 && uop->imm_data < 16) {
+            host_arm64_UBFX(block, REG_TEMP, src_reg, uop->imm_data, 16 - uop->imm_data);
+        } else {
+            host_arm64_AND_IMM(block, REG_TEMP, src_reg, 0xffff);
+            host_arm64_MOV_REG_LSR(block, REG_TEMP, REG_TEMP, uop->imm_data);
+        }
         host_arm64_BFI(block, dest_reg, REG_TEMP, 0, 16);
     } else if (REG_IS_B(dest_size) && REG_IS_B(src_size)) {
-        host_arm64_AND_IMM(block, REG_TEMP, src_reg, 0xff);
-        host_arm64_MOV_REG_LSR(block, REG_TEMP, REG_TEMP, uop->imm_data);
+        if (uop->imm_data > 0 && uop->imm_data < 8) {
+            host_arm64_UBFX(block, REG_TEMP, src_reg, uop->imm_data, 8 - uop->imm_data);
+        } else {
+            host_arm64_AND_IMM(block, REG_TEMP, src_reg, 0xff);
+            host_arm64_MOV_REG_LSR(block, REG_TEMP, REG_TEMP, uop->imm_data);
+        }
         host_arm64_BFI(block, dest_reg, REG_TEMP, 0, 8);
     } else if (REG_IS_BH(dest_size) && REG_IS_BH(src_size)) {
-        host_arm64_UBFX(block, REG_TEMP, src_reg, 8, 8);
-        host_arm64_MOV_REG_LSR(block, REG_TEMP, REG_TEMP, uop->imm_data);
+        if (uop->imm_data > 0 && uop->imm_data < 8) {
+            host_arm64_UBFX(block, REG_TEMP, src_reg, 8 + uop->imm_data, 8 - uop->imm_data);
+        } else {
+            host_arm64_UBFX(block, REG_TEMP, src_reg, 8, 8);
+            host_arm64_MOV_REG_LSR(block, REG_TEMP, REG_TEMP, uop->imm_data);
+        }
         host_arm64_BFI(block, dest_reg, REG_TEMP, 8, 8);
     } else
         fatal("SHR_IMM %02x %02x\n", uop->dest_reg_a_real, uop->src_reg_a_real);
