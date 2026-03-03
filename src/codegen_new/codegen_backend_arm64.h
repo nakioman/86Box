@@ -6,10 +6,11 @@
 
 /*Direct block linking entry points within each block's generated code.
   BLOCK_LINK_ENTRY (offset 0): cycle check followed by body - used by linked jumps.
-  BLOCK_BODY_ENTRY (offset 12): BTI JC landing pad for indirect branches
-    (C dispatch via per_block_entry, trampoline BR X0). */
+  BLOCK_BODY_ENTRY (offset 16): BTI JC landing pad for indirect branches
+    (C dispatch via per_block_entry, trampoline BR X0).
+  Cycle check is 4 instructions (B.cond expands to B.inv + B): 16 bytes. */
 #define BLOCK_LINK_ENTRY 0
-#define BLOCK_BODY_ENTRY 12
+#define BLOCK_BODY_ENTRY 16
 
 extern void *codegen_trampoline_entry;
 

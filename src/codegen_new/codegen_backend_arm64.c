@@ -388,10 +388,11 @@ codegen_set_rounding_mode(int mode)
   SP+56, and loaded REG_CPUSTATE = &cpu_state.
 
   Layout:
-    offset 0  (BLOCK_LINK_ENTRY): LDR W7,[X29,#cycles] / CMP / B.LE exit
-    offset 12 (BLOCK_BODY_ENTRY): BTI JC (indirect branch landing pad)
-    offset 16: FPU TOP setup (if needed), then block body
+    offset 0  (BLOCK_LINK_ENTRY): LDR / CMP / B.GT +8 / B exit
+    offset 16 (BLOCK_BODY_ENTRY): BTI JC (indirect branch landing pad)
+    offset 20: FPU TOP setup (if needed), then block body
 
+  Note: B.LE_ expands to inverted B.GT + unconditional B (2 instructions).
   C dispatch enters via per_block_entry → BLOCK_BODY_ENTRY (cycles already checked).
   Linked blocks enter at BLOCK_LINK_ENTRY (includes cycle check).*/
 void
@@ -402,14 +403,16 @@ codegen_backend_prologue(codeblock_t *block)
 
     block_pos = BLOCK_START;
 
-    /*Link entry: cycle check + BTI landing pad (4 instructions = 16 bytes)*/
+    /*Link entry: cycle check (4 instructions = 16 bytes)*/
     host_arm64_LDR_IMM_W(block, REG_TEMP, REG_CPUSTATE, cycles_offset);
     host_arm64_CMP_IMM(block, REG_TEMP, 0);
     exit_branch = host_arm64_BLE_(block);
     host_arm64_branch_set_offset(exit_branch, codegen_exit_rout);
+
+    /*BTI landing pad at offset 16 (BLOCK_BODY_ENTRY)*/
     host_arm64_BTI_JC(block);
 
-    /*Body entry at offset 12 (BLOCK_BODY_ENTRY = BTI JC above)*/
+    /*Body code at offset 20*/
     if (block->flags & CODEBLOCK_HAS_FPU) {
         host_arm64_LDR_IMM_W(block, REG_TEMP, REG_CPUSTATE, (uintptr_t) &cpu_state.TOP - (uintptr_t) &cpu_state);
         host_arm64_SUB_IMM(block, REG_TEMP, REG_TEMP, block->TOP);
