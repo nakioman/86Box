@@ -173,6 +173,7 @@
 #    define OPCODE_LSR                (0x1ac02400)
 #    define OPCODE_MSR_FPCR           (0xd51b4400)
 #    define OPCODE_MUL_V4H            (0x0e609c00)
+#    define OPCODE_BTI_JC             (0xd50324df)
 #    define OPCODE_NOP                (0xd503201f)
 #    define OPCODE_ORR_V              (0x0ea01c00)
 #    define OPCODE_RET                (0xd65f0000)
@@ -1147,6 +1148,12 @@ void
 host_arm64_MUL_V4H(codeblock_t *block, int dst_reg, int src_n_reg, int src_m_reg)
 {
     codegen_addlong(block, OPCODE_MUL_V4H | Rd(dst_reg) | Rn(src_n_reg) | Rm(src_m_reg));
+}
+
+void
+host_arm64_BTI_JC(codeblock_t *block)
+{
+    codegen_addlong(block, OPCODE_BTI_JC);
 }
 
 void

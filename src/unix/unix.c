@@ -439,7 +439,12 @@ plat_mmap(size_t size, uint8_t executable)
 #elif defined(PROT_MPROTECT)
     void *ret = mmap(0, size, PROT_MPROTECT(PROT_READ | PROT_WRITE | (executable ? PROT_EXEC : 0)), MAP_ANON | MAP_PRIVATE, -1, 0);
 #else
-    void *ret = mmap(0, size, PROT_READ | PROT_WRITE | (executable ? PROT_EXEC : 0), MAP_ANON | MAP_PRIVATE, -1, 0);
+    int prot = PROT_READ | PROT_WRITE | (executable ? PROT_EXEC : 0);
+#    if defined(__aarch64__) && defined(PROT_BTI)
+    if (executable)
+        prot |= PROT_BTI;
+#    endif
+    void *ret = mmap(0, size, prot, MAP_ANON | MAP_PRIVATE, -1, 0);
 #endif
     return (ret < 0) ? NULL : ret;
 }

@@ -6,9 +6,10 @@
 
 /*Direct block linking entry points within each block's generated code.
   BLOCK_LINK_ENTRY (offset 0): cycle check followed by body - used by linked jumps.
-  BLOCK_BODY_ENTRY (offset 16): body entry, skips cycle check - used by C dispatch. */
+  BLOCK_BODY_ENTRY (offset 12): BTI JC landing pad for indirect branches
+    (C dispatch via per_block_entry, trampoline BR X0). */
 #define BLOCK_LINK_ENTRY 0
-#define BLOCK_BODY_ENTRY 16
+#define BLOCK_BODY_ENTRY 12
 
 extern void *codegen_trampoline_entry;
 
@@ -27,6 +28,7 @@ void host_arm64_LDP_POSTIDX_X(codeblock_t *block, int src_reg1, int src_reg2, in
 void host_arm64_LDP_OFFSET_X(codeblock_t *block, int dst_reg1, int dst_reg2, int base_reg, int offset);
 void host_arm64_LDR_LITERAL_W(codeblock_t *block, int dest_reg, int literal_offset);
 void host_arm64_LDR_LITERAL_X(codeblock_t *block, int dest_reg, int literal_offset);
+void host_arm64_BTI_JC(codeblock_t *block);
 void host_arm64_NOP(codeblock_t *block);
 void host_arm64_RET(codeblock_t *block, int reg);
 void host_arm64_STP_PREIDX_X(codeblock_t *block, int src_reg1, int src_reg2, int base_reg, int offset);

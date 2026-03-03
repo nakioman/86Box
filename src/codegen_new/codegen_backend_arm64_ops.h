@@ -164,6 +164,7 @@ void host_arm64_MSR_FPCR(codeblock_t *block, int src_reg);
 
 void host_arm64_MUL_V4H(codeblock_t *block, int dst_reg, int src_n_reg, int src_m_reg);
 
+void host_arm64_BTI_JC(codeblock_t *block);
 void host_arm64_NOP(codeblock_t *block);
 
 void host_arm64_ORR_IMM(codeblock_t *block, int dst_reg, int src_n_reg, uint32_t imm_data);
