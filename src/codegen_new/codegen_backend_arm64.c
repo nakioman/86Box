@@ -323,18 +323,31 @@ codegen_backend_init(void)
     host_arm64_mov_imm(block, REG_ARG1, 0);
     host_arm64_call(block, (void *) x86gpf);
 
+    /*Chain exit stub: loads the per-block exit address from the stack
+      slot written by the outermost block's entry stub, then jumps to it.
+      This replaces the old full register restore; each block now has its
+      own minimal exit stub that only restores the registers it actually saved.*/
     codegen_exit_rout = &block_write_data[block_pos];
-    host_arm64_LDP_POSTIDX_X(block, REG_X19, REG_X20, REG_XSP, 64);
-    host_arm64_LDP_POSTIDX_X(block, REG_X21, REG_X22, REG_XSP, 16);
-    host_arm64_LDP_POSTIDX_X(block, REG_X23, REG_X24, REG_XSP, 16);
-    host_arm64_LDP_POSTIDX_X(block, REG_X25, REG_X26, REG_XSP, 16);
-    host_arm64_LDP_POSTIDX_X(block, REG_X27, REG_X28, REG_XSP, 16);
-    host_arm64_LDP_POSTIDX_X(block, REG_X29, REG_X30, REG_XSP, 16);
+    host_arm64_LDR_IMM_X(block, REG_TEMP, REG_XSP, 56);
+    host_arm64_BR(block, REG_TEMP);
+
+    /*Full restore exit stub: restores ALL callee-saved registers (tier 5).
+      Used by the global trampoline path as its exit stub address stored at SP+56.*/
+    codegen_alloc(block, 80);
+    uint8_t *full_exit_rout = &block_write_data[block_pos];
+    host_arm64_LDP_OFFSET_X(block, REG_X19, REG_X20, REG_XSP, 0);
+    host_arm64_LDP_OFFSET_X(block, REG_X21, REG_X22, REG_XSP, 64);
+    host_arm64_LDP_OFFSET_X(block, REG_X23, REG_X24, REG_XSP, 80);
+    host_arm64_LDP_OFFSET_X(block, REG_X25, REG_X26, REG_XSP, 96);
+    host_arm64_LDP_OFFSET_X(block, REG_X27, REG_X28, REG_XSP, 112);
+    host_arm64_LDP_OFFSET_X(block, REG_X29, REG_X30, REG_XSP, 128);
+    host_arm64_ADDX_IMM(block, REG_XSP, REG_XSP, 144);
     host_arm64_RET(block, REG_X30);
 
-    /*Global trampoline entry: saves callee-saved regs once, loads cpu_state
-      pointer, then branches to the block body address passed in X0.
-      All per-block code shares this single prologue/epilogue pair.*/
+    /*Global trampoline entry: saves all callee-saved regs, stores the
+      full-restore exit address at SP+56, loads cpu_state pointer, then
+      branches to the block body address passed in X0.
+      Used as fallback for blocks without per_block_entry.*/
     codegen_alloc(block, 80);
     codegen_trampoline_entry = &block_write_data[block_pos];
     host_arm64_STP_PREIDX_X(block, REG_X29, REG_X30, REG_XSP, -16);
@@ -343,6 +356,8 @@ codegen_backend_init(void)
     host_arm64_STP_PREIDX_X(block, REG_X23, REG_X24, REG_XSP, -16);
     host_arm64_STP_PREIDX_X(block, REG_X21, REG_X22, REG_XSP, -16);
     host_arm64_STP_PREIDX_X(block, REG_X19, REG_X20, REG_XSP, -64);
+    host_arm64_MOVX_IMM(block, REG_TEMP, (uint64_t) full_exit_rout);
+    host_arm64_STR_IMM_Q(block, REG_TEMP, REG_XSP, 56);
     host_arm64_MOVX_IMM(block, REG_CPUSTATE, (uint64_t) &cpu_state);
     host_arm64_BR(block, REG_X0);
 
@@ -362,14 +377,15 @@ codegen_set_rounding_mode(int mode)
     cpu_state.new_fp_control = mode << 3;
 }
 
-/*Per-block entry code. The global trampoline (codegen_trampoline_entry) has
-  already saved callee-saved registers and loaded REG_CPUSTATE = &cpu_state.
+/*Per-block entry code. The per-block entry stub (or global trampoline fallback)
+  has already saved callee-saved registers, stored the exit stub address at
+  SP+56, and loaded REG_CPUSTATE = &cpu_state.
 
   Layout:
-    offset 0  (BLOCK_LINK_ENTRY): LDR W7,[X29,#cycles] / CMP / B.GT / B exit
+    offset 0  (BLOCK_LINK_ENTRY): LDR W7,[X29,#cycles] / CMP / B.LE exit / NOP
     offset 16 (BLOCK_BODY_ENTRY): FPU TOP setup (if needed), then block body
 
-  C dispatch enters at BLOCK_BODY_ENTRY (cycles already checked).
+  C dispatch enters via per_block_entry → BLOCK_BODY_ENTRY (cycles already checked).
   Linked blocks enter at BLOCK_LINK_ENTRY (includes cycle check).*/
 void
 codegen_backend_prologue(codeblock_t *block)
@@ -396,6 +412,9 @@ codegen_backend_prologue(codeblock_t *block)
 void
 codegen_backend_epilogue(codeblock_t *block)
 {
+    int       save_tier;
+    uint8_t  *exit_stub;
+
     /*Emit a single patchable B to codegen_exit_rout. Direct block linking
       will later patch this to jump to the next block's BLOCK_LINK_ENTRY.
       Only mark as linkable if we have a reliable fall-through PC from
@@ -404,6 +423,47 @@ codegen_backend_epilogue(codeblock_t *block)
     host_arm64_B(block, codegen_exit_rout);
     if (codegen_block_exit_pc != 0)
         block->flags |= CODEBLOCK_LINKABLE;
+
+    /*Compute save tier from tracked register usage.
+      Host regs are assigned in order X19..X28 (indices 0..9).
+      Each tier covers a pair: tier 1 = X19-X20, tier 2 = +X21-X22, etc.*/
+    save_tier = (codegen_max_host_reg_idx >= 0)
+              ? (codegen_max_host_reg_idx / 2) + 1
+              : 0;
+    block->save_tier = save_tier;
+
+    /*Allocate space for both stubs (max ~84 bytes)*/
+    codegen_alloc(block, 84);
+
+    /* --- Per-block exit stub ---
+       Restores only the callee-saved register pairs this block actually used,
+       plus X29/X30 (frame pointer / link register), then tears down the frame. */
+    exit_stub = &block_write_data[block_pos];
+    if (save_tier >= 1) host_arm64_LDP_OFFSET_X(block, REG_X19, REG_X20, REG_XSP, 0);
+    if (save_tier >= 2) host_arm64_LDP_OFFSET_X(block, REG_X21, REG_X22, REG_XSP, 64);
+    if (save_tier >= 3) host_arm64_LDP_OFFSET_X(block, REG_X23, REG_X24, REG_XSP, 80);
+    if (save_tier >= 4) host_arm64_LDP_OFFSET_X(block, REG_X25, REG_X26, REG_XSP, 96);
+    if (save_tier >= 5) host_arm64_LDP_OFFSET_X(block, REG_X27, REG_X28, REG_XSP, 112);
+    host_arm64_LDP_OFFSET_X(block, REG_X29, REG_X30, REG_XSP, 128);
+    host_arm64_ADDX_IMM(block, REG_XSP, REG_XSP, 144);
+    host_arm64_RET(block, REG_X30);
+
+    /* --- Per-block entry stub ---
+       Sets up the 144-byte frame, saves only needed register pairs,
+       stores the exit stub address at SP+56 for chain exits,
+       loads cpu_state pointer, then jumps to the block body. */
+    block->per_block_entry = &block_write_data[block_pos];
+    host_arm64_SUBX_IMM(block, REG_XSP, REG_XSP, 144);
+    if (save_tier >= 1) host_arm64_STP_OFFSET_X(block, REG_X19, REG_X20, REG_XSP, 0);
+    if (save_tier >= 2) host_arm64_STP_OFFSET_X(block, REG_X21, REG_X22, REG_XSP, 64);
+    if (save_tier >= 3) host_arm64_STP_OFFSET_X(block, REG_X23, REG_X24, REG_XSP, 80);
+    if (save_tier >= 4) host_arm64_STP_OFFSET_X(block, REG_X25, REG_X26, REG_XSP, 96);
+    if (save_tier >= 5) host_arm64_STP_OFFSET_X(block, REG_X27, REG_X28, REG_XSP, 112);
+    host_arm64_STP_OFFSET_X(block, REG_X29, REG_X30, REG_XSP, 128);
+    host_arm64_MOVX_IMM(block, REG_TEMP, (uint64_t) exit_stub);
+    host_arm64_STR_IMM_Q(block, REG_TEMP, REG_XSP, 56);
+    host_arm64_MOVX_IMM(block, REG_CPUSTATE, (uint64_t) &cpu_state);
+    host_arm64_B(block, &block->data[BLOCK_BODY_ENTRY]);
 
     codegen_allocator_clean_blocks(block->head_mem_block);
 }

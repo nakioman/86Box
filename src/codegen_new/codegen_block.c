@@ -96,6 +96,8 @@ block_free_list_add(codeblock_t *block)
     block->link_target_taken       = 0;
     block->incoming_link_head_taken = 0;
     block->incoming_link_next_taken = 0;
+    block->save_tier               = 0;
+    block->per_block_entry         = NULL;
 #endif
 }
 
@@ -289,10 +291,14 @@ codegen_try_link(uint16_t source_nr, uint16_t target_nr)
         return;
 
     /*Try fall-through linking (epilogue exit).
-      Self-links are safe: LINK_ENTRY cycle check ensures termination.*/
+      Self-links are safe: LINK_ENTRY cycle check ensures termination.
+      Tier constraint: target must not use more callee-saved registers than
+      the outermost entry block saved. Since linking is transitive
+      (A→B→C implies C.tier ≤ B.tier ≤ A.tier), checking pairwise suffices.*/
     if ((source->flags & CODEBLOCK_LINKABLE) && source->exit_patch_addr
         && !source->link_target
-        && source->next_pc == target->pc) {
+        && source->next_pc == target->pc
+        && target->save_tier <= source->save_tier) {
         codegen_patch_exit(source->exit_patch_addr, &target->data[BLOCK_LINK_ENTRY]);
         source->link_target        = target_nr;
         source->incoming_link_next = target->incoming_link_head;
@@ -303,7 +309,8 @@ codegen_try_link(uint16_t source_nr, uint16_t target_nr)
     if (source->exit_patch_addr_taken
         && !source->link_target_taken
         && source->next_pc_taken != 0
-        && source->next_pc_taken == target->pc) {
+        && source->next_pc_taken == target->pc
+        && target->save_tier <= source->save_tier) {
         codegen_patch_exit(source->exit_patch_addr_taken, &target->data[BLOCK_LINK_ENTRY]);
         source->link_target_taken        = target_nr;
         source->incoming_link_next_taken = target->incoming_link_head_taken;
@@ -541,6 +548,8 @@ invalidate_block(codeblock_t *block)
     /*Clear link metadata since code memory is now freed*/
     block->exit_patch_addr = NULL;
     block->exit_patch_addr_taken = NULL;
+    block->save_tier = 0;
+    block->per_block_entry = NULL;
     block->flags &= ~CODEBLOCK_LINKABLE;
 #endif
 }

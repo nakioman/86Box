@@ -10,6 +10,7 @@
 #include "codegen_reg.h"
 
 int      max_version_refcount;
+int      codegen_max_host_reg_idx = -1;
 uint16_t reg_dead_list = 0;
 
 uint8_t       reg_last_version[IREG_COUNT];
@@ -276,8 +277,9 @@ codegen_reg_reset(void)
         host_fp_reg_set.dirty[c] = 0;
     }
 
-    reg_dead_list        = 0;
-    max_version_refcount = 0;
+    reg_dead_list            = 0;
+    max_version_refcount     = 0;
+    codegen_max_host_reg_idx = -1;
 }
 
 static inline int
@@ -679,6 +681,9 @@ codegen_reg_alloc_read_reg(codeblock_t *block, ir_reg_t ir_reg, int *host_reg_id
         fatal("codegen_reg_alloc_read_reg - refcount < 0\n");
 #endif
 
+    if (reg_set == &host_reg_set && c > codegen_max_host_reg_idx)
+        codegen_max_host_reg_idx = c;
+
     if (host_reg_idx)
         *host_reg_idx = c;
     return reg_set->reg_list[c].reg | IREG_GET_SIZE(ir_reg.reg);
@@ -747,6 +752,9 @@ codegen_reg_alloc_write_reg(codeblock_t *block, ir_reg_t ir_reg)
                 codegen_reg_writeback(reg_set, block, c, 1);
         }
     }
+
+    if (reg_set == &host_reg_set && c > codegen_max_host_reg_idx)
+        codegen_max_host_reg_idx = c;
 
     reg_set->regs[c].reg     = ir_reg.reg;
     reg_set->regs[c].version = ir_reg.version;

@@ -67,6 +67,10 @@ typedef struct codeblock_t {
     uint16_t  incoming_link_head;   /* Head of incoming fall-through link list */
     uint16_t  incoming_link_next;   /* Next in incoming fall-through link list */
 
+    /*Per-block register liveness for minimal prologue/epilogue*/
+    uint8_t   save_tier;          /* Register save tier (0-5) */
+    uint8_t  *per_block_entry;    /* Per-block entry stub address */
+
     /*Branch exit (taken-path B instruction from conditional/unconditional jumps)*/
     uint32_t  next_pc_taken;              /* Branch target PC (cs+dest_addr) */
     uint32_t *exit_patch_addr_taken;      /* Address of patchable B in branch exit path */
