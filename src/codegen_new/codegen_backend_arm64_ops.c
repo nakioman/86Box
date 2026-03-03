@@ -74,8 +74,10 @@
 #    define OPCODE_LDRB_IMM_W         (0x0e5 << 22)
 #    define OPCODE_LDRH_IMM           (0x1e5 << 22)
 #    define OPCODE_LDP_POSTIDX_X      (0x2a3 << 22)
+#    define OPCODE_LDP_OFFSET_X       (0x2a5 << 22)
 #    define OPCODE_SBFX               (0x04c << 22)
 #    define OPCODE_STP_PREIDX_X       (0x2a6 << 22)
+#    define OPCODE_STP_OFFSET_X       (0x2a4 << 22)
 #    define OPCODE_STR_IMM_W          (0x2e4 << 22)
 #    define OPCODE_STR_IMM_Q          (0x3e4 << 22)
 #    define OPCODE_STR_IMM_F64        (0x3f4 << 22)
@@ -964,6 +966,13 @@ host_arm64_LDP_POSTIDX_X(codeblock_t *block, int src_reg1, int src_reg2, int bas
         fatal("host_arm64_LDP_POSTIDX out of range7 %i\n", offset);
     codegen_addlong(block, OPCODE_LDP_POSTIDX_X | IMM7_X(offset) | Rn(base_reg) | Rt(src_reg1) | Rt2(src_reg2));
 }
+void
+host_arm64_LDP_OFFSET_X(codeblock_t *block, int dst_reg1, int dst_reg2, int base_reg, int offset)
+{
+    if (!in_range7_x(offset))
+        fatal("host_arm64_LDP_OFFSET_X out of range7 %i\n", offset);
+    codegen_addlong(block, OPCODE_LDP_OFFSET_X | IMM7_X(offset) | Rn(base_reg) | Rt(dst_reg1) | Rt2(dst_reg2));
+}
 
 void
 host_arm64_LDR_IMM_W(codeblock_t *block, int dest_reg, int base_reg, int offset)
@@ -1308,6 +1317,13 @@ host_arm64_STP_PREIDX_X(codeblock_t *block, int src_reg1, int src_reg2, int base
         fatal("host_arm64_STP_PREIDX out of range7 %i\n", offset);
     codegen_addlong(block, OPCODE_STP_PREIDX_X | IMM7_X(offset) | Rn(base_reg) | Rt(src_reg1) | Rt2(src_reg2));
 }
+void
+host_arm64_STP_OFFSET_X(codeblock_t *block, int src_reg1, int src_reg2, int base_reg, int offset)
+{
+    if (!in_range7_x(offset))
+        fatal("host_arm64_STP_OFFSET_X out of range7 %i\n", offset);
+    codegen_addlong(block, OPCODE_STP_OFFSET_X | IMM7_X(offset) | Rn(base_reg) | Rt(src_reg1) | Rt2(src_reg2));
+}
 
 void
 host_arm64_STR_IMM_W(codeblock_t *block, int dest_reg, int base_reg, int offset)
@@ -1394,6 +1410,19 @@ host_arm64_SUB_IMM(codeblock_t *block, int dst_reg, int src_n_reg, uint32_t imm_
         host_arm64_mov_imm(block, REG_W16, imm_data);
         codegen_addlong(block, OPCODE_SUB_LSL | Rd(dst_reg) | Rn(src_n_reg) | Rm(REG_W16) | DATPROC_SHIFT(0));
     }
+}
+void
+host_arm64_SUBX_IMM(codeblock_t *block, int dst_reg, int src_n_reg, uint64_t imm_data)
+{
+    if (!(imm_data & ~0xffffffull)) {
+        if (imm_data & 0xfff) {
+            codegen_addlong(block, OPCODE_SUBX_IMM | Rd(dst_reg) | Rn(src_n_reg) | IMM12(imm_data & 0xfff) | DATPROC_IMM_SHIFT(0));
+            if (imm_data & 0xfff000)
+                codegen_addlong(block, OPCODE_SUBX_IMM | Rd(dst_reg) | Rn(dst_reg) | IMM12((imm_data >> 12) & 0xfff) | DATPROC_IMM_SHIFT(1));
+        } else if (imm_data & 0xfff000)
+            codegen_addlong(block, OPCODE_SUBX_IMM | Rd(dst_reg) | Rn(src_n_reg) | IMM12((imm_data >> 12) & 0xfff) | DATPROC_IMM_SHIFT(1));
+    } else
+        fatal("SUB_IMM_X %016" PRIu64 "\n", imm_data);
 }
 void
 host_arm64_SUB_REG(codeblock_t *block, int dst_reg, int src_n_reg, int src_m_reg, int shift)

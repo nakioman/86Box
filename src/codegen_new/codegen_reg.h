@@ -320,6 +320,7 @@ extern ir_reg_t invalid_ir_reg;
 typedef uint16_t ir_host_reg_t;
 
 extern int max_version_refcount;
+extern int codegen_max_host_reg_idx;
 
 #define REG_VERSION_MAX  250
 #define REG_REFCOUNT_MAX 250

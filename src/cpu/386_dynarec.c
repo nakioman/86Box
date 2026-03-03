@@ -562,10 +562,13 @@ exec386_dynarec_dyn(void)
         }
         int32_t capped_cycles = cycles;
 
-        /*Execute via trampoline: saves callee-saved regs once,
-          enters block at BLOCK_BODY_ENTRY (skipping cycle check)*/
+        /*Execute via per-block entry stub (minimal save/restore),
+          or fall back to global trampoline for legacy blocks.*/
         inrecomp = 1;
-        ((void (*)(void *)) codegen_trampoline_entry)(&block->data[BLOCK_BODY_ENTRY]);
+        if (block->per_block_entry)
+            ((void (*)(void)) block->per_block_entry)();
+        else
+            ((void (*)(void *)) codegen_trampoline_entry)(&block->data[BLOCK_BODY_ENTRY]);
 #        ifdef USE_ACYCS
         acycs = 0;
 #        endif
