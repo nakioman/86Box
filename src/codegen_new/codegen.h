@@ -81,6 +81,8 @@ extern uint8_t *block_write_data;
 #define CODEBLOCK_IN_DIRTY_LIST 0x40
 /*Code block is not inlining immediate parameters, parameters must be fetched from memory*/
 #define CODEBLOCK_NO_IMMEDIATES 0x80
+/*Code block is on a rapidly-modified page; skip codegen and use interpreter only*/
+#define CODEBLOCK_HOT_SMC 0x100
 
 #define BLOCK_PC_INVALID        0xffffffff
 
