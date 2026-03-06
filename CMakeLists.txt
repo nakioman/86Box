@@ -138,6 +138,7 @@ option(DEV_BRANCH   "Development branch"                                        
 option(DISCORD      "Discord Rich Presence support"                              ON)
 option(DEBUGREGS486 "Enable debug register opeartion on 486+ CPUs"               OFF)
 option(LIBASAN      "Enable compilation with the addresss sanitizer"             OFF)
+option(GPIO         "GPIO support via libgpiod (requires libgpiod 2.0)"         OFF)
 
 if((ARCH STREQUAL "arm64"))
     set(NEW_DYNAREC ON)

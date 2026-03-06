@@ -105,6 +105,7 @@
 #include <86box/plat.h>
 #include <86box/version.h>
 #include <86box/gdbstub.h>
+#include <86box/gpio.h>
 #include <86box/machine_status.h>
 #include <86box/apm.h>
 #include <86box/acpi.h>
@@ -244,6 +245,12 @@ double   video_gl_input_scale = 1.0;                              /* (C) OpenGL 
 int      video_gl_input_scale_mode = FULLSCR_SCALE_FULL;          /* (C) OpenGL 3.x input stretch mode */
 int      color_scheme = 0;                                        /* (C) Color scheme of UI (Windows-only) */
 int      fdd_sounds_enabled = 1;                                  /* (C) Floppy drive sounds enabled */
+
+#ifdef USE_GPIO
+int      gpio_enabled = 0;
+char     gpio_device[256] = "/dev/gpiochip0";
+int      gpio_hdd_pin = -1;                                      /* -1 = disabled */
+#endif
 
 // Accelerator key array
 struct accelKey acc_keys[NUM_ACCELS];
@@ -1497,6 +1504,8 @@ pc_init_modules(void)
     hdd_audio_load_profiles();
     hdd_audio_init();
 
+    gpio_init();
+
     sound_init();
 
     hdc_init();
@@ -1965,6 +1974,7 @@ pc_close(UNUSED(thread_t *ptr))
 
     gdbstub_close();
 
+    gpio_close();
 }
 
 #ifdef __APPLE__

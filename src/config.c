@@ -274,6 +274,13 @@ load_general(void)
     force_constant_mouse = ini_section_get_int(cat, "force_constant_mouse", 0);
     fdd_sounds_enabled = ini_section_get_int(cat, "fdd_sounds_enabled", 1);
 
+#ifdef USE_GPIO
+    gpio_enabled = ini_section_get_int(cat, "gpio_enabled", 0);
+    p = ini_section_get_string(cat, "gpio_device", "/dev/gpiochip0");
+    strncpy(gpio_device, p, sizeof(gpio_device) - 1);
+    gpio_hdd_pin = ini_section_get_int(cat, "gpio_hdd_pin", -1);
+#endif
+
     p = ini_section_get_string(cat, "uuid", NULL);
     if (p != NULL)
         strncpy(uuid, p, sizeof(uuid) - 1);
@@ -2617,6 +2624,23 @@ save_general(void)
         ini_section_delete_var(cat, "fdd_sounds_enabled");
     else
         ini_section_set_int(cat, "fdd_sounds_enabled", fdd_sounds_enabled);
+
+#ifdef USE_GPIO
+    if (gpio_enabled)
+        ini_section_set_int(cat, "gpio_enabled", gpio_enabled);
+    else
+        ini_section_delete_var(cat, "gpio_enabled");
+
+    if (strcmp(gpio_device, "/dev/gpiochip0") != 0)
+        ini_section_set_string(cat, "gpio_device", gpio_device);
+    else
+        ini_section_delete_var(cat, "gpio_device");
+
+    if (gpio_hdd_pin >= 0)
+        ini_section_set_int(cat, "gpio_hdd_pin", gpio_hdd_pin);
+    else
+        ini_section_delete_var(cat, "gpio_hdd_pin");
+#endif
 
     char cpu_buf[128] = { 0 };
     plat_get_cpu_string(cpu_buf, 128);

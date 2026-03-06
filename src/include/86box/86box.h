@@ -264,6 +264,12 @@ extern char monitor_edid_path[1024];        /* (C) Path to custom EDID */
 extern int color_scheme;                    /* (C) Color scheme of UI (Windows-only) */
 extern int fdd_sounds_enabled;              /* (C) Enable floppy drive sounds */
 
+#ifdef USE_GPIO
+extern int  gpio_enabled;                   /* (G) Enable GPIO output */
+extern char gpio_device[256];               /* (G) GPIO chip device path */
+extern int  gpio_hdd_pin;                   /* (G) GPIO pin for HDD activity LED */
+#endif
+
 #ifndef USE_NEW_DYNAREC
 extern FILE *stdlog; /* file to log output to */
 #endif
