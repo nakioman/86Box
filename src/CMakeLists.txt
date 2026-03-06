@@ -117,6 +117,15 @@ if(INSTRUMENT)
     add_compile_definitions(USE_INSTRUMENT)
 endif()
 
+if(GPIO)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GPIOD REQUIRED libgpiod>=2.0)
+    add_compile_definitions(USE_GPIO)
+    target_sources(86Box PRIVATE gpio.c)
+    target_include_directories(86Box PRIVATE ${GPIOD_INCLUDE_DIRS})
+    target_link_libraries(86Box ${GPIOD_LIBRARIES})
+endif()
+
 target_link_libraries(86Box
     cpu
     chipset

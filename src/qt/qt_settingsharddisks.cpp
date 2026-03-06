@@ -21,6 +21,7 @@ extern "C" {
 #include <86box/86box.h>
 #include <86box/hdd.h>
 #include <86box/hdd_audio.h>
+#include <86box/gpio.h>
 }
 
 #include <QStandardItemModel>
@@ -147,8 +148,16 @@ SettingsHarddisks::SettingsHarddisks(QWidget *parent)
     onTableRowChanged(QModelIndex());
 
     Harddrives::populateBuses(ui->comboBoxBus->model());
-    
+
     on_comboBoxBus_currentIndexChanged(0);
+
+#ifdef USE_GPIO
+    ui->checkBoxGpioEnabled->setChecked(gpio_enabled);
+    ui->lineEditGpioDevice->setText(gpio_device);
+    ui->spinBoxGpioHddPin->setValue(gpio_hdd_pin);
+#else
+    ui->groupBoxGpio->setVisible(false);
+#endif
 }
 
 SettingsHarddisks::~SettingsHarddisks()
@@ -177,6 +186,14 @@ SettingsHarddisks::save()
         strncpy(hdd[i].fn, fileName.data(), sizeof(hdd[i].fn) - 1);
         hdd[i].priv = nullptr;
     }
+
+#ifdef USE_GPIO
+    gpio_enabled = ui->checkBoxGpioEnabled->isChecked() ? 1 : 0;
+    QByteArray dev = ui->lineEditGpioDevice->text().toUtf8();
+    strncpy(gpio_device, dev.data(), sizeof(gpio_device) - 1);
+    gpio_device[sizeof(gpio_device) - 1] = '\0';
+    gpio_hdd_pin = ui->spinBoxGpioHddPin->value();
+#endif
 }
 
 void
