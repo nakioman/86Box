@@ -793,12 +793,13 @@ MainWindow::MainWindow(QWidget *parent)
         video_setblit(qt_blit);
 
     if (start_in_fullscreen) {
-        connect(ui->stackedWidget, &RendererStack::blitToRenderer, this, [this]() {
-            if (start_in_fullscreen) {
-                QTimer::singleShot(100, ui->actionFullscreen, &QAction::trigger);
-                start_in_fullscreen = 0;
-            }
-        });
+        video_fullscreen = 1;
+        ui->menubar->hide();
+        ui->statusbar->hide();
+        ui->toolBar->hide();
+        setFixedSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+        ui->stackedWidget->setFixedSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+        start_in_fullscreen = 0;
     }
 
 #ifdef MTR_ENABLED
@@ -1167,6 +1168,8 @@ MainWindow::showEvent(QShowEvent *event)
     if (shownonce)
         return;
     shownonce = true;
+    if (video_fullscreen > 0)
+        return;
     if (window_remember) {
         if (window_w == 0)
             window_w = 320;
