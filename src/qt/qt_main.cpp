@@ -754,7 +754,9 @@ main(int argc, char *argv[])
 #endif
 
     main_window = new MainWindow();
-    if (startMaximized) {
+    if (video_fullscreen > 0) {
+        main_window->showFullScreen();
+    } else if (startMaximized) {
         main_window->showMaximized();
     } else {
         main_window->show();
