@@ -128,6 +128,15 @@ RendererStack::RendererStack(QWidget *parent, int monitor_index)
         });
         frameRateTimer->start(1000);
     }
+
+    QTimer *outputFpsTimer = new QTimer(this);
+    outputFpsTimer->setSingleShot(false);
+    outputFpsTimer->setInterval(1000);
+    connect(outputFpsTimer, &QTimer::timeout, [this] {
+        m_outputFps.store(m_outputFrameCount.exchange(0));
+    });
+    outputFpsTimer->start(1000);
+
 #if defined __unix__ && !defined __HAIKU__
     memset(auto_mouse_type, 0, sizeof(auto_mouse_type));
     mousedata.mouse_type = getenv("EMU86BOX_MOUSE");
@@ -521,6 +530,7 @@ RendererStack::blit(int x, int y, int w, int h)
     }
     video_blit_complete_monitor(m_monitor_index);
     screenshot_buf = (uint32_t *) imagebits;
+    m_outputFrameCount.fetch_add(1, std::memory_order_relaxed);
     emit blitToRenderer(currentBuf, sx, sy, sw, sh);
     currentBuf = (currentBuf + 1) % imagebufs.size();
 }

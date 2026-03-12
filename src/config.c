@@ -248,9 +248,10 @@ load_general(void)
     sound_gain = ini_section_get_int(cat, "sound_gain", 0);
 
     kbd_req_capture = ini_section_get_int(cat, "kbd_req_capture", 0);
-    hide_status_bar = ini_section_get_int(cat, "hide_status_bar", 0);
-    hide_tool_bar   = ini_section_get_int(cat, "hide_tool_bar", 0);
-    sound_muted     = ini_section_get_int(cat, "sound_muted", 0);
+    hide_status_bar    = ini_section_get_int(cat, "hide_status_bar", 0);
+    hide_tool_bar      = ini_section_get_int(cat, "hide_tool_bar", 0);
+    show_renderer_fps  = ini_section_get_int(cat, "show_renderer_fps", 0);
+    sound_muted        = ini_section_get_int(cat, "sound_muted", 0);
 
     enable_discord = !!ini_section_get_int(cat, "enable_discord", 0);
 
@@ -2368,6 +2369,7 @@ config_load(void)
         kbd_req_capture      = 0;
         hide_status_bar      = 0;
         hide_tool_bar        = 0;
+        show_renderer_fps    = 0;
         scale                = 1;
         machine              = machine_get_machine_from_internal_name("ibmpc");
         dpi_scale            = 1;
@@ -2678,6 +2680,11 @@ save_general(void)
         ini_section_set_int(cat, "hide_tool_bar", hide_tool_bar);
     else
         ini_section_delete_var(cat, "hide_tool_bar");
+
+    if (show_renderer_fps != 0)
+        ini_section_set_int(cat, "show_renderer_fps", show_renderer_fps);
+    else
+        ini_section_delete_var(cat, "show_renderer_fps");
 
     if (enable_discord)
         ini_section_set_int(cat, "enable_discord", enable_discord);

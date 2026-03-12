@@ -100,6 +100,8 @@ public:
     void setFocusRenderer();
     void onResize(int width, int height);
 
+    int  outputFps() const { return m_outputFps.load(); }
+
     QWidget *currentWidget() { return current.get(); }
 
     void (*mouse_capture_func)(QWindow *window) = nullptr;
@@ -141,6 +143,9 @@ private:
 
     std::atomic_bool rendererTakesScreenshots;
     std::atomic_bool switchInProgress { false };
+
+    std::atomic<int> m_outputFrameCount { 0 };
+    std::atomic<int> m_outputFps { 0 };
 
     char auto_mouse_type[16];
 };

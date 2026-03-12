@@ -99,6 +99,7 @@ ProgSettings::ProgSettings(QWidget *parent)
     ui->checkBoxConfirmExit->setChecked(confirm_exit);
     ui->checkBoxConfirmSave->setChecked(confirm_save);
     ui->checkBoxConfirmHardReset->setChecked(confirm_reset);
+    ui->checkBoxShowRendererFps->setChecked(show_renderer_fps);
 
     ui->radioButtonSystem->setChecked(color_scheme == 0);
     ui->radioButtonLight->setChecked(color_scheme == 1);
@@ -119,6 +120,7 @@ ProgSettings::accept()
     confirm_exit            = ui->checkBoxConfirmExit->isChecked() ? 1 : 0;
     confirm_save            = ui->checkBoxConfirmSave->isChecked() ? 1 : 0;
     confirm_reset           = ui->checkBoxConfirmHardReset->isChecked() ? 1 : 0;
+    show_renderer_fps       = ui->checkBoxShowRendererFps->isChecked() ? 1 : 0;
     inhibit_multimedia_keys = ui->checkBoxMultimediaKeys->isChecked() ? 1 : 0;
 
     color_scheme = (ui->radioButtonSystem->isChecked()) ? 0 : (ui->radioButtonLight->isChecked() ? 1 : 2);

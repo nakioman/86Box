@@ -118,6 +118,7 @@ extern int      update_icons;
 extern int kbd_req_capture;
 extern int hide_status_bar;
 extern int hide_tool_bar;
+extern int show_renderer_fps;
 extern int fullscreen_ui_visible;
 
 /* System-related functions. */

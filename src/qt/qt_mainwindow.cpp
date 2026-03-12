@@ -197,16 +197,24 @@ MainWindow::MainWindow(QWidget *parent)
     statusBar()->setVisible(!hide_status_bar);
 
     auto    hertz_label    = new QLabel;
+    auto    renderer_fps_label = new QLabel;
+    renderer_fps_label->setVisible(show_renderer_fps);
     QTimer *frameRateTimer = new QTimer(this);
     frameRateTimer->setInterval(1000);
     frameRateTimer->setSingleShot(false);
-    connect(frameRateTimer, &QTimer::timeout, [hertz_label] {
+    connect(frameRateTimer, &QTimer::timeout, [this, hertz_label, renderer_fps_label] {
         auto hz = monitors[0].mon_actualrenderedframes.load();
 #ifdef SCREENSHOT_MODE
         hz = ((hz + 2) / 5) * 5;
 #endif
         hertz_label->setText(tr("%1 Hz").arg(QString::number(hz) + (monitors[0].mon_interlace ? "i" : "")));
+
+        renderer_fps_label->setVisible(show_renderer_fps);
+        if (show_renderer_fps) {
+            renderer_fps_label->setText(tr("%1 FPS").arg(ui->stackedWidget->outputFps()));
+        }
     });
+    statusBar()->addPermanentWidget(renderer_fps_label);
     statusBar()->addPermanentWidget(hertz_label);
     frameRateTimer->start(1000);
 
