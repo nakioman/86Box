@@ -670,8 +670,14 @@ gw_read_physical_track(gw_t *dev, int cylinder, int side)
 
     if (dev->current_cylinder != cylinder) {
         if (gw_cmd_seek(dev, cylinder) < 0) {
-            gw_log("GW: seek to cyl %d FAILED\n", cylinder);
-            return -1;
+            /* Seek failed -- try recovery: re-select, re-motor, retry */
+            gw_log("GW: seek to cyl %d failed, attempting recovery\n", cylinder);
+            gw_cmd_select(dev);
+            gw_cmd_motor(dev, 1);
+            if (gw_cmd_seek(dev, cylinder) < 0) {
+                gw_log("GW: seek to cyl %d FAILED after recovery\n", cylinder);
+                return -1;
+            }
         }
         dev->current_cylinder = cylinder;
     }
@@ -1136,6 +1142,17 @@ gw_detect_geometry(gw_t *dev, int drive)
 /* ========================================================================
  * Public API -- Linux implementations
  * ======================================================================== */
+/* Check if a device path is already in use by a loaded drive */
+static int
+gw_device_in_use(const char *path)
+{
+    for (int d = 0; d < FDD_NUM; d++) {
+        if (gw[d] != NULL && gw[d]->fd >= 0 && strcmp(gw[d]->dev_path, path) == 0)
+            return 1;
+    }
+    return 0;
+}
+
 int
 gw_detect_devices(char devices[][256], int max_devices)
 {
@@ -1144,6 +1161,14 @@ gw_detect_devices(char devices[][256], int max_devices)
 
     for (int i = 0; i < 10 && count < max_devices; i++) {
         snprintf(path, sizeof(path), "/dev/ttyACM%d", i);
+
+        /* Skip devices already in use -- probing would corrupt their state */
+        if (gw_device_in_use(path)) {
+            strncpy(devices[count], path, 255);
+            devices[count][255] = '\0';
+            count++;
+            continue;
+        }
 
         int fd = gw_serial_open(path);
         if (fd < 0)
@@ -1197,6 +1222,13 @@ gw_load(int drive, char *fn)
     dev->cache.valid      = 0;
 
     strncpy(dev->dev_path, dev_path, sizeof(dev->dev_path) - 1);
+
+    /* Prevent the same physical device from being loaded on two drives */
+    if (gw_device_in_use(dev_path)) {
+        gw_log("GW: Device %s already in use by another drive\n", dev_path);
+        free(dev);
+        return;
+    }
 
     dev->fd = gw_serial_open(dev_path);
     if (dev->fd < 0) {
