@@ -1098,14 +1098,15 @@ gw_seek(int drive, int track)
     if (fdd_doublestep_40(drive))
         physical_track /= 2;
 
+    gw_log("GW: gw_seek(drive=%d, track=%d, phys=%d) cache=%s motor=%d\n",
+           drive, track, physical_track,
+           (dev->cache.valid && dev->cache.cylinder == physical_track) ? "HIT" : "MISS",
+           (int)motoron[drive]);
+
     d86f_set_cur_track(drive, track);
 
-    if (dev->cache.valid && dev->cache.cylinder == physical_track) {
-        /* Cache hit -- track data and d86f linked lists are already set up.
-         * Do NOT re-prepare the track, as destroying/recreating the linked
-         * lists while d86f is scanning for sectors causes lost sectors. */
+    if (dev->cache.valid && dev->cache.cylinder == physical_track)
         return;
-    }
 
     dev->cache.valid    = 0;
     dev->cache.cylinder = physical_track;
@@ -1137,13 +1138,6 @@ gw_seek(int drive, int track)
 
     dev->cache.valid = 1;
 
-    /* Reset the floppy poll timer after blocking physical I/O.
-     * Without this, the timer catches up by firing thousands of times
-     * instantly (the TSC advanced during our serial I/O), causing d86f
-     * to simulate hundreds of disk rotations and timeout with "sector
-     * not found". Resetting the timer re-synchronizes d86f's rotation
-     * simulation to the current time. */
-    timer_set_delay_u64(&fdd_poll_time[drive], TIMER_USEC * 32);
 
 prepare_track:
     d86f_reset_index_hole_pos(drive, 0);
