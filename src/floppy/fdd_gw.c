@@ -1100,23 +1100,45 @@ gw_detect_devices(char devices[][256], int max_devices)
         if (fd < 0)
             continue;
 
-        uint8_t cmd_v3[] = { 3, GW_CMD_GET_INFO, GW_INFO_FIRMWARE };
-        uint8_t resp[32];
-
-        gw_serial_write(fd, cmd_v3, 3);
-
+        /* Use short timeout for probing */
         struct termios tio;
         tcgetattr(fd, &tio);
-        tio.c_cc[VTIME] = 5;
+        tio.c_cc[VTIME] = 5; /* 0.5 second */
         tcsetattr(fd, TCSANOW, &tio);
 
-        int n = read(fd, resp, sizeof(resp));
+        uint8_t resp[32];
+        int     n;
+        int     detected = 0;
 
-        if (n >= 4 && (resp[1] & 0x80)) {
+        /* Try v4 framing first: [len_lo, len_hi, cmd, reserved, param...] */
+        {
+            uint8_t cmd_v4[] = { 8, 0, GW_CMD_GET_INFO, 0, GW_INFO_FIRMWARE, 0, 0, 0 };
+            gw_serial_write(fd, cmd_v4, 8);
+            n = read(fd, resp, sizeof(resp));
+            /* v4 ack: [len_lo, len_hi, cmd|0x80, ack_status, ...] */
+            if (n >= 4 && (resp[2] & 0x80) && resp[3] == GW_ACK_OK) {
+                detected = 1;
+                gw_log("GW: Detected v4 device at %s\n", path);
+            }
+        }
+
+        /* Try v3 framing if v4 didn't work: [total_len, cmd, param] */
+        if (!detected) {
+            tcflush(fd, TCIOFLUSH);
+            uint8_t cmd_v3[] = { 3, GW_CMD_GET_INFO, GW_INFO_FIRMWARE };
+            gw_serial_write(fd, cmd_v3, 3);
+            n = read(fd, resp, sizeof(resp));
+            /* v3 ack: [len, cmd|0x80, ...] */
+            if (n >= 2 && (resp[1] & 0x80)) {
+                detected = 1;
+                gw_log("GW: Detected v3 device at %s\n", path);
+            }
+        }
+
+        if (detected) {
             strncpy(devices[count], path, 255);
             devices[count][255] = '\0';
             count++;
-            gw_log("GW: Detected device at %s\n", path);
         }
 
         gw_serial_close(fd);
