@@ -1366,7 +1366,7 @@ gw_load(int drive, char *fn)
     d86f_handler[drive].index_hole_pos    = null_index_hole_pos;
     d86f_handler[drive].get_raw_size      = common_get_raw_size;
     d86f_handler[drive].check_crc         = 1;
-    d86f_set_version(drive, D86FVER);
+    d86f_set_version(drive, 0x0063);
 
     drives[drive].seek = gw_seek;
     d86f_common_handlers(drive);
