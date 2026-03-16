@@ -59,18 +59,20 @@ gw_log(const char *fmt, ...)
 #include <sys/select.h>
 #include <errno.h>
 
-/* GreaseWeazle protocol commands */
-#define GW_CMD_GET_INFO    0
-#define GW_CMD_SEEK        7
-#define GW_CMD_HEAD        8
-#define GW_CMD_MOTOR       11
-#define GW_CMD_READ_FLUX   12
-#define GW_CMD_WRITE_FLUX  13
-#define GW_CMD_GET_FLUX_STATUS 14
-#define GW_CMD_SELECT      18
-#define GW_CMD_DESELECT    19
-#define GW_CMD_SET_BUS_TYPE 20
-#define GW_CMD_RESET       23
+/* GreaseWeazle protocol commands (from Cmd class in usb.py) */
+#define GW_CMD_GET_INFO        0
+#define GW_CMD_SEEK            2
+#define GW_CMD_HEAD            3
+#define GW_CMD_SET_PARAMS      4
+#define GW_CMD_GET_PARAMS      5
+#define GW_CMD_MOTOR           6
+#define GW_CMD_READ_FLUX       7
+#define GW_CMD_WRITE_FLUX      8
+#define GW_CMD_GET_FLUX_STATUS 9
+#define GW_CMD_SELECT         12
+#define GW_CMD_DESELECT       13
+#define GW_CMD_SET_BUS_TYPE   14
+#define GW_CMD_RESET          16
 
 /* GW ack status codes */
 #define GW_ACK_OK       0
@@ -100,7 +102,6 @@ typedef struct gw_t {
     uint8_t  fw_major, fw_minor;
     uint32_t sample_freq;
     uint8_t  hw_model;
-    int      is_v4;
 
     int      tracks, sides, sectors, sector_size;
     int      data_rate;
@@ -269,61 +270,35 @@ gw_serial_read_flux(int fd, uint8_t *buf, int maxlen)
 
 /* ========================================================================
  * GW Protocol Layer
+ *
+ * Wire format (all firmware versions):
+ *   Send:  [cmd_byte, total_len_byte, params...]
+ *   Response: 2 bytes [cmd_echo, ack_status]
+ *   Additional response data (e.g. GetInfo) is read separately after ack.
  * ======================================================================== */
+
+/* Send a command and read the 2-byte ack. Returns 0 on success, -1 on error. */
 static int
-gw_send_cmd(gw_t *dev, uint8_t cmd, const uint8_t *params, int param_len)
+gw_send_cmd(int fd, const uint8_t *cmd, int cmd_len)
 {
-    uint8_t frame[64];
-    int     frame_len;
-
-    if (dev->is_v4) {
-        int total = 4 + param_len;
-        frame[0]  = total & 0xFF;
-        frame[1]  = (total >> 8) & 0xFF;
-        frame[2]  = cmd;
-        frame[3]  = 0;
-        if (param_len > 0)
-            memcpy(frame + 4, params, param_len);
-        frame_len = total;
-    } else {
-        frame_len = 2 + param_len;
-        frame[0]  = frame_len;
-        frame[1]  = cmd;
-        if (param_len > 0)
-            memcpy(frame + 2, params, param_len);
-    }
-
-    return gw_serial_write(dev->fd, frame, frame_len);
-}
-
-static int
-gw_recv_ack(gw_t *dev, uint8_t expected_cmd)
-{
-    uint8_t resp[64];
-    int     hdr_len = dev->is_v4 ? 4 : 2;
-
-    int n = gw_serial_read(dev->fd, resp, hdr_len);
-    if (n < hdr_len)
+    if (gw_serial_write(fd, cmd, cmd_len) < 0)
         return -1;
 
-    int resp_len;
-    if (dev->is_v4)
-        resp_len = resp[0] | (resp[1] << 8);
-    else
-        resp_len = resp[0];
+    uint8_t ack[2];
+    int n = gw_serial_read(fd, ack, 2);
+    if (n < 2) {
+        gw_log("GW: short ack (%d bytes)\n", n);
+        return -1;
+    }
 
-    int extra = resp_len - hdr_len;
-    if (extra > 0 && extra < (int) sizeof(resp) - hdr_len)
-        gw_serial_read(dev->fd, resp + hdr_len, extra);
+    if (ack[0] != cmd[0]) {
+        gw_log("GW: ack cmd mismatch (got 0x%02X, expected 0x%02X)\n", ack[0], cmd[0]);
+        return -1;
+    }
 
-    if (dev->is_v4) {
-        if (resp[2] != (expected_cmd | 0x80) || resp[3] != GW_ACK_OK)
-            return -1;
-    } else {
-        if (!(resp[1] & 0x80))
-            return -1;
-        if (extra > 0 && resp[hdr_len] != GW_ACK_OK)
-            return -1;
+    if (ack[1] != GW_ACK_OK) {
+        gw_log("GW: command 0x%02X failed with status %d\n", cmd[0], ack[1]);
+        return -1;
     }
 
     return 0;
@@ -332,112 +307,102 @@ gw_recv_ack(gw_t *dev, uint8_t expected_cmd)
 static int
 gw_cmd_get_info(gw_t *dev)
 {
-    uint8_t params[4] = { GW_INFO_FIRMWARE, 0, 0, 0 };
-    uint8_t resp[32];
-    int     hdr_len = dev->is_v4 ? 4 : 2;
+    /* GetInfo: [cmd=0, len=3, sub_cmd=0(Firmware)] */
+    uint8_t cmd[] = { GW_CMD_GET_INFO, 3, GW_INFO_FIRMWARE };
 
-    if (gw_send_cmd(dev, GW_CMD_GET_INFO, params, dev->is_v4 ? 4 : 1) < 0)
+    if (gw_send_cmd(dev->fd, cmd, sizeof(cmd)) < 0)
         return -1;
 
-    int n = gw_serial_read(dev->fd, resp, hdr_len);
-    if (n < hdr_len)
+    /* Response: 32 bytes of firmware info
+     * Format (little-endian): 4B + I + 4B + 3H + 14x
+     *   [0] fw_major, [1] fw_minor, [2] is_main, [3] max_cmd,
+     *   [4..7] sample_freq (uint32 LE),
+     *   [8] hw_model, [9] hw_submodel, [10] usb_speed,
+     *   [11..12] mcu_id, [13..14] mcu_mhz, [15..16] mcu_sram_kb,
+     *   [17..18] usb_buf_kb, [19..31] reserved */
+    uint8_t info[32];
+    int n = gw_serial_read(dev->fd, info, 32);
+    if (n < 8) {
+        gw_log("GW: GetInfo response too short (%d bytes)\n", n);
         return -1;
-
-    int resp_len = dev->is_v4 ? (resp[0] | (resp[1] << 8)) : resp[0];
-    int extra    = resp_len - hdr_len;
-    if (extra > 0 && extra <= (int) sizeof(resp) - hdr_len)
-        gw_serial_read(dev->fd, resp + hdr_len, extra);
-
-    if (dev->is_v4) {
-        if (extra < 8)
-            return -1;
-        dev->fw_major    = resp[4];
-        dev->fw_minor    = resp[5];
-        dev->sample_freq = resp[8] | (resp[9] << 8) | (resp[10] << 16) | (resp[11] << 24);
-        if (extra >= 9)
-            dev->hw_model = resp[12];
-    } else {
-        if (extra < 6)
-            return -1;
-        dev->fw_major    = resp[2];
-        dev->fw_minor    = resp[3];
-        dev->sample_freq = resp[5] | (resp[6] << 8) | (resp[7] << 16) | (resp[8] << 24);
     }
 
-    gw_log("GW: firmware v%d.%d, sample_freq=%u Hz\n",
-           dev->fw_major, dev->fw_minor, dev->sample_freq);
+    dev->fw_major    = info[0];
+    dev->fw_minor    = info[1];
+    dev->sample_freq = info[4] | (info[5] << 8) | (info[6] << 16) | (info[7] << 24);
+    if (n >= 9)
+        dev->hw_model = info[8];
+
+    gw_log("GW: firmware v%d.%d, sample_freq=%u Hz, hw_model=%d\n",
+           dev->fw_major, dev->fw_minor, dev->sample_freq, dev->hw_model);
     return 0;
 }
 
 static int
 gw_cmd_set_bus_type(gw_t *dev, uint8_t bus_type)
 {
-    uint8_t params[4] = { bus_type, 0, 0, 0 };
-    if (gw_send_cmd(dev, GW_CMD_SET_BUS_TYPE, params, dev->is_v4 ? 4 : 1) < 0)
-        return -1;
-    return gw_recv_ack(dev, GW_CMD_SET_BUS_TYPE);
+    uint8_t cmd[] = { GW_CMD_SET_BUS_TYPE, 3, bus_type };
+    return gw_send_cmd(dev->fd, cmd, sizeof(cmd));
 }
 
 static int
 gw_cmd_select(gw_t *dev)
 {
-    if (gw_send_cmd(dev, GW_CMD_SELECT, NULL, 0) < 0)
-        return -1;
-    return gw_recv_ack(dev, GW_CMD_SELECT);
+    uint8_t cmd[] = { GW_CMD_SELECT, 3, 0 /* unit 0 */ };
+    return gw_send_cmd(dev->fd, cmd, sizeof(cmd));
 }
 
 static int
 gw_cmd_deselect(gw_t *dev)
 {
-    if (gw_send_cmd(dev, GW_CMD_DESELECT, NULL, 0) < 0)
-        return -1;
-    return gw_recv_ack(dev, GW_CMD_DESELECT);
+    uint8_t cmd[] = { GW_CMD_DESELECT, 2 };
+    return gw_send_cmd(dev->fd, cmd, sizeof(cmd));
 }
 
 static int
 gw_cmd_motor(gw_t *dev, int on)
 {
-    uint8_t params[4] = { 0, on ? 1 : 0, 0, 0 };
-    if (gw_send_cmd(dev, GW_CMD_MOTOR, params, dev->is_v4 ? 4 : 2) < 0)
-        return -1;
-    return gw_recv_ack(dev, GW_CMD_MOTOR);
+    uint8_t cmd[] = { GW_CMD_MOTOR, 4, 0 /* unit */, on ? 1 : 0 };
+    return gw_send_cmd(dev->fd, cmd, sizeof(cmd));
 }
 
 static int
 gw_cmd_seek(gw_t *dev, int cylinder)
 {
-    uint8_t params[4] = { (uint8_t) cylinder, 0, 0, 0 };
-    if (gw_send_cmd(dev, GW_CMD_SEEK, params, dev->is_v4 ? 4 : 1) < 0)
-        return -1;
-    return gw_recv_ack(dev, GW_CMD_SEEK);
+    /* Seek: [cmd=2, len=3, cyl (signed byte)] */
+    uint8_t cmd[] = { GW_CMD_SEEK, 3, (uint8_t) (int8_t) cylinder };
+    return gw_send_cmd(dev->fd, cmd, sizeof(cmd));
 }
 
 static int
 gw_cmd_head(gw_t *dev, int head)
 {
-    uint8_t params[4] = { (uint8_t) head, 0, 0, 0 };
-    if (gw_send_cmd(dev, GW_CMD_HEAD, params, dev->is_v4 ? 4 : 1) < 0)
-        return -1;
-    return gw_recv_ack(dev, GW_CMD_HEAD);
+    uint8_t cmd[] = { GW_CMD_HEAD, 3, (uint8_t) head };
+    return gw_send_cmd(dev->fd, cmd, sizeof(cmd));
 }
 
 static int
 gw_cmd_read_flux(gw_t *dev, uint8_t *flux_buf, int max_flux_len)
 {
-    uint8_t params[8];
-    memset(params, 0, sizeof(params));
-    params[0] = 2; /* 2 revolutions */
+    /* ReadFlux: [cmd=7, len=8, ticks(4 LE), revolutions(2 LE)]
+     * ticks=0 means no limit, revolutions = revs+1 (so 3 = read 2 revolutions) */
+    uint8_t cmd[8];
+    cmd[0] = GW_CMD_READ_FLUX;
+    cmd[1] = 8;
+    /* ticks = 0 (no tick limit) */
+    cmd[2] = 0; cmd[3] = 0; cmd[4] = 0; cmd[5] = 0;
+    /* revolutions = 3 (read 2 full revolutions) */
+    cmd[6] = 3; cmd[7] = 0;
 
-    if (gw_send_cmd(dev, GW_CMD_READ_FLUX, params, dev->is_v4 ? 8 : 2) < 0)
+    if (gw_send_cmd(dev->fd, cmd, sizeof(cmd)) < 0)
         return -1;
 
-    if (gw_recv_ack(dev, GW_CMD_READ_FLUX) < 0)
-        return -1;
-
+    /* Read flux stream data until end marker (0x00 byte) */
     int n = gw_serial_read_flux(dev->fd, flux_buf, max_flux_len);
 
-    if (gw_send_cmd(dev, GW_CMD_GET_FLUX_STATUS, NULL, 0) >= 0)
-        gw_recv_ack(dev, GW_CMD_GET_FLUX_STATUS);
+    /* GetFluxStatus to check for errors */
+    uint8_t status_cmd[] = { GW_CMD_GET_FLUX_STATUS, 2 };
+    gw_send_cmd(dev->fd, status_cmd, sizeof(status_cmd));
 
     return n;
 }
@@ -858,12 +823,12 @@ gw_writeback(int drive)
             gw_cmd_seek(dev, dev->cache.cylinder);
             gw_cmd_head(dev, side);
 
-            if (gw_send_cmd(dev, GW_CMD_WRITE_FLUX, NULL, 0) >= 0) {
-                if (gw_recv_ack(dev, GW_CMD_WRITE_FLUX) >= 0) {
-                    gw_serial_write(dev->fd, wire, wire_len);
-                    gw_send_cmd(dev, GW_CMD_GET_FLUX_STATUS, NULL, 0);
-                    gw_recv_ack(dev, GW_CMD_GET_FLUX_STATUS);
-                }
+            /* WriteFlux: [cmd=8, len=4, cue_at_index=1, terminate_at_index=1] */
+            uint8_t wf_cmd[] = { GW_CMD_WRITE_FLUX, 4, 1, 1 };
+            if (gw_send_cmd(dev->fd, wf_cmd, sizeof(wf_cmd)) >= 0) {
+                gw_serial_write(dev->fd, wire, wire_len);
+                uint8_t status_cmd[] = { GW_CMD_GET_FLUX_STATUS, 2 };
+                gw_send_cmd(dev->fd, status_cmd, sizeof(status_cmd));
             }
         }
     }
@@ -1100,45 +1065,23 @@ gw_detect_devices(char devices[][256], int max_devices)
         if (fd < 0)
             continue;
 
-        /* Use short timeout for probing */
-        struct termios tio;
-        tcgetattr(fd, &tio);
-        tio.c_cc[VTIME] = 5; /* 0.5 second */
-        tcsetattr(fd, TCSANOW, &tio);
+        /* Send GetInfo command: [cmd=0, len=3, sub=0(Firmware)] */
+        uint8_t cmd[] = { GW_CMD_GET_INFO, 3, GW_INFO_FIRMWARE };
+        gw_serial_write(fd, cmd, sizeof(cmd));
 
-        uint8_t resp[32];
-        int     n;
-        int     detected = 0;
+        /* Read 2-byte ack: [cmd_echo, ack_status] */
+        uint8_t ack[2];
+        int n = gw_serial_read(fd, ack, 2);
 
-        /* Try v4 framing first: [len_lo, len_hi, cmd, reserved, param...] */
-        {
-            uint8_t cmd_v4[] = { 8, 0, GW_CMD_GET_INFO, 0, GW_INFO_FIRMWARE, 0, 0, 0 };
-            gw_serial_write(fd, cmd_v4, 8);
-            n = read(fd, resp, sizeof(resp));
-            /* v4 ack: [len_lo, len_hi, cmd|0x80, ack_status, ...] */
-            if (n >= 4 && (resp[2] & 0x80) && resp[3] == GW_ACK_OK) {
-                detected = 1;
-                gw_log("GW: Detected v4 device at %s\n", path);
-            }
-        }
+        if (n >= 2 && ack[0] == GW_CMD_GET_INFO && ack[1] == GW_ACK_OK) {
+            /* Valid GW device -- drain the 32-byte info response */
+            uint8_t info[32];
+            gw_serial_read(fd, info, 32);
 
-        /* Try v3 framing if v4 didn't work: [total_len, cmd, param] */
-        if (!detected) {
-            tcflush(fd, TCIOFLUSH);
-            uint8_t cmd_v3[] = { 3, GW_CMD_GET_INFO, GW_INFO_FIRMWARE };
-            gw_serial_write(fd, cmd_v3, 3);
-            n = read(fd, resp, sizeof(resp));
-            /* v3 ack: [len, cmd|0x80, ...] */
-            if (n >= 2 && (resp[1] & 0x80)) {
-                detected = 1;
-                gw_log("GW: Detected v3 device at %s\n", path);
-            }
-        }
-
-        if (detected) {
             strncpy(devices[count], path, 255);
             devices[count][255] = '\0';
             count++;
+            gw_log("GW: Detected device at %s\n", path);
         }
 
         gw_serial_close(fd);
@@ -1178,21 +1121,13 @@ gw_load(int drive, char *fn)
         return;
     }
 
-    /* Determine protocol version */
-    dev->is_v4 = 0;
+    /* Get firmware info */
     if (gw_cmd_get_info(dev) < 0) {
-        dev->is_v4 = 1;
-        tcflush(dev->fd, TCIOFLUSH);
-        if (gw_cmd_get_info(dev) < 0) {
-            gw_log("GW: Failed to get device info\n");
-            gw_serial_close(dev->fd);
-            free(dev);
-            return;
-        }
+        gw_log("GW: Failed to get device info\n");
+        gw_serial_close(dev->fd);
+        free(dev);
+        return;
     }
-
-    if (dev->fw_major >= 4)
-        dev->is_v4 = 1;
 
     if (dev->sample_freq == 0)
         dev->sample_freq = 72000000;
