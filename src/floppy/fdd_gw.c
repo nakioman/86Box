@@ -112,7 +112,8 @@ typedef struct gw_t {
         int     sector_error[2][GW_MAX_SECTORS];
     } cache;
 
-    int sel_sector_idx[2];
+    int sel_side;
+    int sel_idx;
 
     uint8_t write_data[2][GW_MAX_SECTORS][GW_MAX_SECTOR_SIZE];
     int     write_pending;
@@ -653,7 +654,23 @@ gw_parse_mfm_track(gw_t *dev, const uint8_t *mfm_bits, int total_bits, int side)
     }
 
     dev->cache.sector_count[side] = sector_count;
-    gw_log("GW: Parsed %d sectors on side %d\n", sector_count, side);
+
+    /* Log sector summary with CRC status */
+    int crc_errors = 0;
+    for (int i = 0; i < sector_count; i++) {
+        if (dev->cache.sector_error[side][i])
+            crc_errors++;
+    }
+    gw_log("GW: Parsed %d sectors on side %d (%d CRC errors). IDs:", sector_count, side, crc_errors);
+    for (int i = 0; i < sector_count; i++) {
+        gw_log(" %d/%d/%d/%d%s",
+               dev->cache.sector_id[side][i][0],
+               dev->cache.sector_id[side][i][1],
+               dev->cache.sector_id[side][i][2],
+               dev->cache.sector_id[side][i][3],
+               dev->cache.sector_error[side][i] ? "!" : "");
+    }
+    gw_log("\n");
 }
 
 /* ========================================================================
@@ -944,50 +961,72 @@ gw_side_flags(int drive)
 }
 
 static void
-gw_set_sector(int drive, UNUSED(int side), UNUSED(uint8_t c), UNUSED(uint8_t h),
+gw_set_sector(int drive, UNUSED(int side), UNUSED(uint8_t c), uint8_t h,
               uint8_t r, UNUSED(uint8_t n))
 {
     gw_t *dev = gw[drive];
     if (dev == NULL)
         return;
 
-    for (int s = 0; s < 2; s++) {
-        for (int i = 0; i < dev->cache.sector_count[s]; i++) {
-            if (dev->cache.sector_id[s][i][2] == r) {
-                dev->sel_sector_idx[s] = i;
-                return;
-            }
+    /* Use h (head from sector ID) to determine which side, matching fdd_img.c pattern.
+     * Prefer sectors without CRC errors when duplicates exist (from multi-revolution reads). */
+    int s = h;
+    if (s >= dev->sides)
+        s = 0;
+
+    /* First pass: find a CRC-good sector */
+    for (int i = 0; i < dev->cache.sector_count[s]; i++) {
+        if (dev->cache.sector_id[s][i][2] == r && !dev->cache.sector_error[s][i]) {
+            dev->sel_side = s;
+            dev->sel_idx  = i;
+            return;
         }
     }
+    /* Second pass: accept any sector (even with CRC error) */
+    for (int i = 0; i < dev->cache.sector_count[s]; i++) {
+        if (dev->cache.sector_id[s][i][2] == r) {
+            dev->sel_side = s;
+            dev->sel_idx  = i;
+            gw_log("GW: set_sector: using CRC-bad sector h=%d r=%d\n", h, r);
+            return;
+        }
+    }
+
+    gw_log("GW: set_sector: h=%d r=%d NOT FOUND (side has %d sectors)\n",
+           h, r, dev->cache.sector_count[s]);
+    dev->sel_side = s;
+    dev->sel_idx  = -1;
 }
 
 static uint8_t
-gw_read_data(int drive, int side, uint16_t pos)
+gw_read_data(int drive, UNUSED(int side), uint16_t pos)
 {
     const gw_t *dev = gw[drive];
     if (dev == NULL)
         return 0;
 
-    int idx = dev->sel_sector_idx[side];
-    if (idx < 0 || idx >= dev->cache.sector_count[side])
+    int s   = dev->sel_side;
+    int idx = dev->sel_idx;
+    if (idx < 0 || idx >= dev->cache.sector_count[s])
         return 0;
 
-    return dev->cache.sector_data[side][idx][pos];
+    return dev->cache.sector_data[s][idx][pos];
 }
 
 static void
-gw_write_data(int drive, int side, uint16_t pos, uint8_t data)
+gw_write_data(int drive, UNUSED(int side), uint16_t pos, uint8_t data)
 {
     gw_t *dev = gw[drive];
     if (dev == NULL)
         return;
 
-    int idx = dev->sel_sector_idx[side];
-    if (idx < 0 || idx >= dev->cache.sector_count[side])
+    int s   = dev->sel_side;
+    int idx = dev->sel_idx;
+    if (idx < 0 || idx >= dev->cache.sector_count[s])
         return;
 
-    dev->write_data[side][idx][pos] = data;
-    dev->write_pending              = 1;
+    dev->write_data[s][idx][pos] = data;
+    dev->write_pending           = 1;
 }
 
 static int
