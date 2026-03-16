@@ -54,6 +54,7 @@ extern "C" {
 #include <86box/cartridge.h>
 #include <86box/fdd.h>
 #include <86box/fdd_86f.h>
+#include <86box/fdd_gw.h>
 #include <86box/cdrom.h>
 #include <86box/scsi_device.h>
 #include <86box/rdisk.h>
@@ -147,6 +148,24 @@ MediaMenu::refresh(QMenu *parentMenu)
             floppyImageHistoryPos[slot] = menu->children().count();
             menu->addAction(img_icon, tr("Image %1").arg(slot), [this, i, slot]() { floppyMenuSelect(i, slot); })->setCheckable(false);
         }
+
+#ifdef Q_OS_LINUX
+        {
+            char gw_devs[4][256];
+            int  gw_count = gw_detect_devices(gw_devs, 4);
+            if (gw_count > 0) {
+                menu->addSeparator();
+                for (int g = 0; g < gw_count; g++) {
+                    QString devPath = QString(gw_devs[g]);
+                    menu->addAction(img_icon, tr("&GreaseWeazle (%1)").arg(devPath),
+                        [this, i, devPath] {
+                            floppyMount(i, QString("greaseweazle://%1").arg(devPath), false);
+                        });
+                }
+            }
+        }
+#endif
+
         menu->addSeparator();
         floppyExportPos = menu->children().count();
         menu->addAction(getIconWithIndicator(img_icon, pixmap_size, QIcon::Normal, Export), tr("E&xport to 86F…"), [this, i]() { floppyExportTo86f(i); });
@@ -572,8 +591,13 @@ MediaMenu::floppyUpdateMenu(int i)
     }
 
     int type = fdd_get_type(i);
-    floppyMenus[i]->setTitle(tr("&Floppy %1 (%2): %3").arg(QString::number(i + 1), fdd_getname(type), name.isEmpty() ? tr("(empty)") : name));
-    floppyMenus[i]->setToolTip(tr("Floppy %1 (%2): %3").arg(QString::number(i + 1), fdd_getname(type), name.isEmpty() ? tr("(empty)") : name));
+    QString displayName;
+    if (name.startsWith("greaseweazle://"))
+        displayName = tr("GreaseWeazle (%1)").arg(name.mid(strlen("greaseweazle://")));
+    else
+        displayName = name.isEmpty() ? tr("(empty)") : name;
+    floppyMenus[i]->setTitle(tr("&Floppy %1 (%2): %3").arg(QString::number(i + 1), fdd_getname(type), displayName));
+    floppyMenus[i]->setToolTip(tr("Floppy %1 (%2): %3").arg(QString::number(i + 1), fdd_getname(type), displayName));
 }
 
 void

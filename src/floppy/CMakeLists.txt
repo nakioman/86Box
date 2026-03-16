@@ -33,6 +33,7 @@ add_library(fdd OBJECT
     fdd_img.c
     fdd_pcjs.c
     fdd_mfm.c
+    fdd_gw.c
     fdd_td0.c
     fdd_audio.c
 )

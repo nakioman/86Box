@@ -1044,7 +1044,7 @@ load_image_file(char *dest, char *p, uint8_t *ui_wp)
     } else if ((ui_wp != NULL) && *ui_wp)
         prefix = "wp://";
 
-    if (strstr(p, "ioctl://") == p) {
+    if (strstr(p, "ioctl://") == p || strstr(p, "greaseweazle://") == p) {
         if (strlen(p) > (MAX_IMAGE_PATH_LEN - 11))
             ret = 1;
         else
@@ -3300,7 +3300,7 @@ save_image_file(char *cat, char *var, char *src)
         prefix  = "wp://";
     }
 
-    if (strstr(src, "ioctl://") == src)
+    if (strstr(src, "ioctl://") == src || strstr(src, "greaseweazle://") == src)
         snprintf(temp, 2048, "%s", src);
     else if (!strnicmp(src, usr_path, strlen(usr_path)))
         snprintf(temp, 2048, "%s%s", prefix, &src[strlen(usr_path)]);

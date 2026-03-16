@@ -39,6 +39,7 @@
 #include <86box/fdd_img.h>
 #include <86box/fdd_pcjs.h>
 #include <86box/fdd_mfm.h>
+#include <86box/fdd_gw.h>
 #include <86box/fdd_td0.h>
 #include <86box/fdc.h>
 #include <86box/fdd_audio.h>
@@ -168,6 +169,7 @@ static const struct
     { "TD0",  td0_load,  td0_close,  -1 },
     { "VFD",  img_load,  img_close,  -1 },
     { "XDF",  img_load,  img_close,  -1 },
+    { NULL,   gw_load,   gw_close,   -1 },  /* GreaseWeazle -- no extension, dispatched by URI */
     { 0,      0,         0,          0  }
 };
 
@@ -669,6 +671,30 @@ fdd_load(int drive, char *fn)
         ui_writeprot[drive] = 1;
     }
     fn += offs;
+
+    /* GreaseWeazle URI dispatch -- before extension-based lookup */
+    if (strstr(fn, "greaseweazle://") == fn) {
+        /* Find the GW loader entry (searches for gw_load function pointer) */
+        int gw_idx = 0;
+        while (loaders[gw_idx].load != NULL) {
+            if (loaders[gw_idx].load == gw_load)
+                break;
+            gw_idx++;
+        }
+        if (loaders[gw_idx].load == gw_load) {
+            driveloaders[drive] = gw_idx;
+            if (floppyfns[drive] != (fn - offs))
+                strcpy(floppyfns[drive], fn - offs);
+            d86f_setup(drive);
+            gw_load(drive, fn);
+            drive_empty[drive] = 0;
+            fdd_forced_seek(drive, 0);
+            fdd_changed[drive] = 1;
+            ui_sb_update_icon_wp(SB_FLOPPY | drive, ui_writeprot[drive]);
+        }
+        return;
+    }
+
     p = path_get_extension(fn);
     if (!p)
         return;
@@ -959,6 +985,7 @@ void
 fdd_set_fdc(void *fdc)
 {
     fdd_fdc = (fdc_t *) fdc;
+    gw_set_fdc(fdc);
 }
 
 void
