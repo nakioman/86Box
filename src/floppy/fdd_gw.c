@@ -1027,6 +1027,7 @@ gw_set_sector(int drive, UNUSED(int side), UNUSED(uint8_t c), uint8_t h,
         if (dev->cache.sector_id[s][i][2] == r && !dev->cache.sector_error[s][i]) {
             dev->sel_side = s;
             dev->sel_idx  = i;
+            gw_log("GW: set_sector OK: h=%d r=%d -> side=%d idx=%d\n", h, r, s, i);
             return;
         }
     }
@@ -1040,8 +1041,8 @@ gw_set_sector(int drive, UNUSED(int side), UNUSED(uint8_t c), uint8_t h,
         }
     }
 
-    gw_log("GW: set_sector: h=%d r=%d NOT FOUND (side has %d sectors)\n",
-           h, r, dev->cache.sector_count[s]);
+    gw_log("GW: set_sector: h=%d r=%d NOT FOUND (side %d has %d sectors)\n",
+           h, r, s, dev->cache.sector_count[s]);
     dev->sel_side = s;
     dev->sel_idx  = -1;
 }
@@ -1143,6 +1144,9 @@ prepare_track:
         return;
     }
 
+    gw_log("GW: prepare_track: disk_flags=0x%04X track_flags=0x%04X gap2=%d gap3=%d\n",
+           dev->disk_flags, dev->track_flags, dev->gap2_size, dev->gap3_size);
+
     for (int side = 0; side < dev->sides; side++) {
         int current_pos = d86f_prepare_pretrack(drive, side, 0);
 
@@ -1157,6 +1161,8 @@ prepare_track:
             if (s == 0)
                 d86f_initialize_last_sector_id(drive, id[0], id[1], id[2], id[3]);
         }
+        gw_log("GW: side %d: prepared %d sectors, final_pos=%d\n",
+               side, dev->cache.sector_count[side], current_pos);
     }
 }
 
@@ -1217,7 +1223,7 @@ gw_detect_geometry(gw_t *dev, int drive)
     if (dev->sides == 2)
         dev->disk_flags |= 0x08;
 
-    dev->gap2_size = (dev->data_rate >= 500000) ? 41 : 22;
+    dev->gap2_size = (dev->data_rate >= 1000000) ? 41 : 22; /* 41 only for ED (1Mbps) */
     dev->gap3_size = gap3_sizes[dev->track_flags & 3][dev->sector_size][dev->sectors];
     if (!dev->gap3_size)
         dev->gap3_size = 0x1B;
