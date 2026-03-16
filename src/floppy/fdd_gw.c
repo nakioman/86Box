@@ -1133,6 +1133,14 @@ gw_seek(int drive, int track)
 
     dev->cache.valid = 1;
 
+    /* Reset the floppy poll timer after blocking physical I/O.
+     * Without this, the timer catches up by firing thousands of times
+     * instantly (the TSC advanced during our serial I/O), causing d86f
+     * to simulate hundreds of disk rotations and timeout with "sector
+     * not found". Resetting the timer re-synchronizes d86f's rotation
+     * simulation to the current time. */
+    timer_set_delay_u64(&fdd_poll_time[drive], TIMER_USEC * 32);
+
 prepare_track:
     d86f_reset_index_hole_pos(drive, 0);
     d86f_reset_index_hole_pos(drive, 1);
