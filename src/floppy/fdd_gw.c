@@ -1144,8 +1144,12 @@ prepare_track:
         return;
     }
 
-    gw_log("GW: prepare_track: disk_flags=0x%04X track_flags=0x%04X gap2=%d gap3=%d\n",
-           dev->disk_flags, dev->track_flags, dev->gap2_size, dev->gap3_size);
+    gw_log("GW: prepare_track: disk_flags=0x%04X track_flags=0x%04X gap2=%d gap3=%d "
+           "drive_type=%d is_hd=%d is_dd=%d densel=%d hole=%d can_read=%d\n",
+           dev->disk_flags, dev->track_flags, dev->gap2_size, dev->gap3_size,
+           fdd_get_type(drive), fdd_is_hd(drive), fdd_is_dd(drive),
+           fdd_get_densel(drive), (dev->disk_flags >> 1) & 3,
+           fdd_can_read_medium(drive));
 
     for (int side = 0; side < dev->sides; side++) {
         int current_pos = d86f_prepare_pretrack(drive, side, 0);
