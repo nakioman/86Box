@@ -1095,7 +1095,11 @@ gw_seek(int drive, int track)
         return;
 
     int physical_track = track;
-    if (fdd_doublestep_40(drive))
+
+    /* Only apply double-stepping for 40-track (48tpi) media in an 80-track drive.
+     * For 80-track media (tracks > 43), do NOT halve.
+     * This matches the track_width check in fdd_img.c's img_seek. */
+    if (dev->tracks <= 43 && fdd_doublestep_40(drive))
         physical_track /= 2;
 
     gw_log("GW: gw_seek(drive=%d, track=%d, phys=%d) cache=%s motor=%d\n",
