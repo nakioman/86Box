@@ -83,11 +83,11 @@ gw_log(const char *fmt, ...)
 /* GW GetInfo sub-commands */
 #define GW_INFO_FIRMWARE 0
 
-/* Flux stream opcodes */
-#define GW_FLUX_OVFL16   0xFF
-#define GW_FLUX_INDEX    1
-#define GW_FLUX_SPACE    2
-#define GW_FLUX_END      0
+/* Flux stream encoding */
+#define GW_FLUX_ESCAPE   0xFF  /* Next byte is an opcode */
+#define GW_FLUX_OP_INDEX 1     /* Index pulse (followed by 28-bit value) */
+#define GW_FLUX_OP_SPACE 2     /* Space/gap (followed by 28-bit value) */
+#define GW_FLUX_END      0     /* End of stream */
 
 /* Maximum flux buffer size */
 #define GW_MAX_FLUX_TICKS  500000
@@ -248,7 +248,7 @@ gw_serial_read_flux(int fd, uint8_t *buf, int maxlen)
     while (total < maxlen) {
         FD_ZERO(&rfds);
         FD_SET(fd, &rfds);
-        tv.tv_sec  = 3;
+        tv.tv_sec  = 5;
         tv.tv_usec = 0;
 
         int ret = select(fd + 1, &rfds, NULL, NULL, &tv);
@@ -259,11 +259,11 @@ gw_serial_read_flux(int fd, uint8_t *buf, int maxlen)
         if (n <= 0)
             break;
 
-        for (int i = total; i < total + n; i++) {
-            if (buf[i] == GW_FLUX_END && i > 0)
-                return i + 1;
-        }
         total += n;
+
+        /* Stream ends with a 0x00 byte */
+        if (buf[total - 1] == GW_FLUX_END)
+            break;
     }
     return total;
 }
@@ -410,33 +410,75 @@ gw_cmd_read_flux(gw_t *dev, uint8_t *flux_buf, int max_flux_len)
 /* ========================================================================
  * Flux-to-MFM PLL Decoder
  * ======================================================================== */
+/* Read a 28-bit value from 4 bytes of flux stream (GW bit-packed encoding) */
+static uint32_t
+gw_read_28bit(const uint8_t *p)
+{
+    uint32_t val;
+    val  = (p[0] & 0xFE) >> 1;
+    val += (uint32_t)(p[1] & 0xFE) << 6;
+    val += (uint32_t)(p[2] & 0xFE) << 13;
+    val += (uint32_t)(p[3] & 0xFE) << 20;
+    return val;
+}
+
+/* Decode GW flux byte stream into flux tick values.
+ *
+ * Encoding:
+ *   0        = end of stream
+ *   1-249    = direct flux tick value
+ *   250-254  = multi-byte: val = 250 + (byte-250)*255 + next_byte - 1
+ *   255      = escape; next byte is opcode:
+ *              1 = Index (+ 28-bit value) -- ignored for sector parsing
+ *              2 = Space (+ 28-bit value) -- added to accumulator
+ */
 static int
 gw_decode_flux_stream(const uint8_t *raw, int raw_len, uint32_t *ticks, int max_ticks)
 {
     int      tick_count = 0;
     uint32_t accum      = 0;
+    int      i          = 0;
 
-    for (int i = 0; i < raw_len && tick_count < max_ticks; i++) {
-        uint8_t b = raw[i];
+    while (i < raw_len && tick_count < max_ticks) {
+        uint8_t b = raw[i++];
 
         if (b == GW_FLUX_END)
             break;
-        if (b == GW_FLUX_INDEX)
-            continue;
-        if (b == GW_FLUX_SPACE) {
-            if (i + 2 < raw_len) {
-                accum += (raw[i + 1] << 8) | raw[i + 2];
-                i += 2;
+
+        if (b == GW_FLUX_ESCAPE) {
+            /* Escape: next byte is opcode */
+            if (i >= raw_len)
+                break;
+            uint8_t opcode = raw[i++];
+            if (opcode == GW_FLUX_OP_INDEX) {
+                /* Index pulse marker -- skip the 28-bit value */
+                if (i + 4 <= raw_len)
+                    i += 4;
+            } else if (opcode == GW_FLUX_OP_SPACE) {
+                /* Space: add 28-bit value to accumulator */
+                if (i + 4 <= raw_len) {
+                    accum += gw_read_28bit(raw + i);
+                    i += 4;
+                }
             }
-            continue;
-        }
-        if (b == GW_FLUX_OVFL16) {
-            accum += 250;
+            /* Other opcodes: skip */
             continue;
         }
 
-        ticks[tick_count++] = accum + b;
-        accum               = 0;
+        uint32_t val;
+        if (b < 250) {
+            /* Direct flux value */
+            val = b;
+        } else {
+            /* Multi-byte: val = 250 + (b - 250) * 255 + next_byte - 1 */
+            if (i >= raw_len)
+                break;
+            val = 250 + (b - 250) * 255 + raw[i++] - 1;
+        }
+
+        accum += val;
+        ticks[tick_count++] = accum;
+        accum = 0;
     }
 
     return tick_count;
@@ -679,20 +721,38 @@ gw_encode_mfm_sync(int prev_bit, uint8_t *mfm_out)
     return 1;
 }
 
+/* Encode flux ticks to GW wire format for WriteFlux.
+ * Uses the same encoding as the read path:
+ *   1-249: direct value
+ *   250-254 + next_byte: multi-byte for values 250-1524
+ *   For larger values, use Space opcode. */
 static int
 gw_encode_flux_wire(const uint32_t *ticks, int tick_count, uint8_t *wire, int max_wire)
 {
     int pos = 0;
 
-    for (int i = 0; i < tick_count && pos < max_wire - 4; i++) {
+    for (int i = 0; i < tick_count && pos < max_wire - 8; i++) {
         uint32_t t = ticks[i];
-        while (t >= 250 && pos < max_wire - 2) {
-            wire[pos++] = GW_FLUX_OVFL16;
-            t -= 250;
+
+        if (t < 250) {
+            if (t == 0) t = 1;
+            wire[pos++] = (uint8_t) t;
+        } else if (t <= 1524) {
+            /* Multi-byte: first_byte = 250 + ((t-250) / 255), second_byte = (t-250) % 255 + 1 */
+            uint32_t v = t - 250;
+            wire[pos++] = (uint8_t)(250 + v / 255);
+            wire[pos++] = (uint8_t)(v % 255 + 1);
+        } else {
+            /* Use Space opcode for very large values, then emit a 1-tick flux */
+            wire[pos++] = GW_FLUX_ESCAPE;
+            wire[pos++] = GW_FLUX_OP_SPACE;
+            /* 28-bit encoding */
+            wire[pos++] = (uint8_t)(((t >> 0) & 0x7F) << 1);
+            wire[pos++] = (uint8_t)(((t >> 7) & 0x7F) << 1);
+            wire[pos++] = (uint8_t)(((t >> 14) & 0x7F) << 1);
+            wire[pos++] = (uint8_t)(((t >> 21) & 0x7F) << 1);
+            wire[pos++] = 1; /* 1-tick flux transition */
         }
-        if (t == 0)
-            t = 1;
-        wire[pos++] = (uint8_t) t;
     }
 
     if (pos < max_wire)
