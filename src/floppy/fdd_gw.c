@@ -539,11 +539,15 @@ gw_read_mfm_bytes(const uint8_t *mfm_bits, int total_bits, int pos, uint8_t *out
 static int
 gw_find_sync(const uint8_t *mfm_bits, int total_bits, int start)
 {
-    /* A1 sync with missing clock, 3 consecutive (48 bits total) */
+    /* MFM sync A1 with missing clock = 0x4489:
+     * Normal A1 (0x44A9): 01 00 01 00 10 10 10 01
+     * Sync   A1 (0x4489): 01 00 01 00 10 00 10 01
+     *                                     ^^ missing clock at bit 2
+     * Three consecutive sync A1 bytes (48 bits total): */
     static const uint8_t sync_pattern[] = {
-        0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1,
-        0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1,
-        0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1
+        0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1,
+        0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1,
+        0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1
     };
     int sync_len = 48;
 
@@ -734,7 +738,8 @@ gw_encode_mfm_byte(uint8_t byte, int prev_bit, uint8_t *mfm_out)
 static int
 gw_encode_mfm_sync(int prev_bit, uint8_t *mfm_out)
 {
-    static const uint8_t sync_a1[] = { 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1 };
+    /* Sync A1 = 0x4489: 01 00 01 00 10 00 10 01 */
+    static const uint8_t sync_a1[] = { 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1 };
     memcpy(mfm_out, sync_a1, 16);
     (void) prev_bit;
     return 1;
