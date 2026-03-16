@@ -1156,12 +1156,37 @@ prepare_track:
         return;
     }
 
-    gw_log("GW: prepare_track: disk_flags=0x%04X track_flags=0x%04X gap2=%d gap3=%d "
-           "drive_type=%d is_hd=%d is_dd=%d densel=%d hole=%d can_read=%d\n",
-           dev->disk_flags, dev->track_flags, dev->gap2_size, dev->gap3_size,
-           fdd_get_type(drive), fdd_is_hd(drive), fdd_is_dd(drive),
-           fdd_get_densel(drive), (dev->disk_flags >> 1) & 3,
-           fdd_can_read_medium(drive));
+    {
+        /* Check d86f_can_read_address conditions */
+        int fdc_period = gw_fdc ? fdc_get_bitcell_period(gw_fdc) : -1;
+        int fdc_mfm    = gw_fdc ? fdc_is_mfm(gw_fdc) : -1;
+
+        /* Compute d86f bitcell period (same formula as d86f_get_bitcell_period) */
+        int tflags = dev->track_flags;
+        int mfm    = (tflags & 8) ? 1 : 0;
+        double rate_d;
+        switch (tflags & 7) {
+            case 0: rate_d = 500.0; break;
+            case 1: rate_d = 300.0; break;
+            case 2: rate_d = 250.0; break;
+            case 3: rate_d = 1000.0; break;
+            default: rate_d = 250.0; break;
+        }
+        if (!mfm) rate_d /= 2.0;
+        double rpm_d = ((tflags & 0xE0) == 0x20) ? 360.0 : 300.0;
+        double size_d = (8000.0 * 250.0) / rate_d;
+        size_d = (size_d * 300.0) / rpm_d;
+        int drive_rpm = fdd_getrpm(drive);
+        size_d = (size_d * (double)drive_rpm) / 300.0;
+        int d86f_period = (int) size_d;
+
+        gw_log("GW: prepare_track: disk_flags=0x%04X track_flags=0x%04X gap2=%d gap3=%d "
+               "fdc_period=%d d86f_period=%d match=%d fdc_mfm=%d d86f_mfm=%d "
+               "can_read=%d drive_rpm=%d\n",
+               dev->disk_flags, dev->track_flags, dev->gap2_size, dev->gap3_size,
+               fdc_period, d86f_period, (fdc_period == d86f_period),
+               fdc_mfm, mfm, fdd_can_read_medium(drive), drive_rpm);
+    }
 
     for (int side = 0; side < dev->sides; side++) {
         int current_pos = d86f_prepare_pretrack(drive, side, 0);
