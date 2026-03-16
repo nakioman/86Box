@@ -653,6 +653,54 @@ gw_parse_mfm_track(gw_t *dev, const uint8_t *mfm_bits, int total_bits, int side)
         }
     }
 
+    /* Deduplicate sectors from multi-revolution reads.
+     * Keep only the first CRC-good occurrence of each R value.
+     * If no good copy exists, keep the first occurrence (even if CRC-bad). */
+    {
+        int dedup_count = 0;
+        uint8_t  dedup_id[GW_MAX_SECTORS][4];
+        uint8_t  dedup_data[GW_MAX_SECTORS][GW_MAX_SECTOR_SIZE];
+        int      dedup_error[GW_MAX_SECTORS];
+
+        for (int i = 0; i < sector_count; i++) {
+            uint8_t r = dev->cache.sector_id[side][i][2];
+
+            /* Check if we already have this R value */
+            int existing = -1;
+            for (int j = 0; j < dedup_count; j++) {
+                if (dedup_id[j][2] == r) {
+                    existing = j;
+                    break;
+                }
+            }
+
+            if (existing >= 0) {
+                /* Replace if existing has CRC error and this one doesn't */
+                if (dedup_error[existing] && !dev->cache.sector_error[side][i]) {
+                    memcpy(dedup_id[existing], dev->cache.sector_id[side][i], 4);
+                    int ssize = 128 << dev->cache.sector_id[side][i][3];
+                    memcpy(dedup_data[existing], dev->cache.sector_data[side][i], ssize);
+                    dedup_error[existing] = 0;
+                }
+            } else if (dedup_count < GW_MAX_SECTORS) {
+                memcpy(dedup_id[dedup_count], dev->cache.sector_id[side][i], 4);
+                int ssize = 128 << dev->cache.sector_id[side][i][3];
+                memcpy(dedup_data[dedup_count], dev->cache.sector_data[side][i], ssize);
+                dedup_error[dedup_count] = dev->cache.sector_error[side][i];
+                dedup_count++;
+            }
+        }
+
+        /* Copy deduplicated sectors back */
+        for (int i = 0; i < dedup_count; i++) {
+            memcpy(dev->cache.sector_id[side][i], dedup_id[i], 4);
+            int ssize = 128 << dedup_id[i][3];
+            memcpy(dev->cache.sector_data[side][i], dedup_data[i], ssize);
+            dev->cache.sector_error[side][i] = dedup_error[i];
+        }
+        sector_count = dedup_count;
+    }
+
     dev->cache.sector_count[side] = sector_count;
 
     /* Log sector summary with CRC status */
@@ -661,7 +709,7 @@ gw_parse_mfm_track(gw_t *dev, const uint8_t *mfm_bits, int total_bits, int side)
         if (dev->cache.sector_error[side][i])
             crc_errors++;
     }
-    gw_log("GW: Parsed %d sectors on side %d (%d CRC errors). IDs:", sector_count, side, crc_errors);
+    gw_log("GW: side %d: %d unique sectors (%d CRC errors). IDs:", side, sector_count, crc_errors);
     for (int i = 0; i < sector_count; i++) {
         gw_log(" %d/%d/%d/%d%s",
                dev->cache.sector_id[side][i][0],
