@@ -1100,8 +1100,12 @@ gw_seek(int drive, int track)
 
     d86f_set_cur_track(drive, track);
 
-    if (dev->cache.valid && dev->cache.cylinder == physical_track)
-        goto prepare_track;
+    if (dev->cache.valid && dev->cache.cylinder == physical_track) {
+        /* Cache hit -- track data and d86f linked lists are already set up.
+         * Do NOT re-prepare the track, as destroying/recreating the linked
+         * lists while d86f is scanning for sectors causes lost sectors. */
+        return;
+    }
 
     dev->cache.valid    = 0;
     dev->cache.cylinder = physical_track;
