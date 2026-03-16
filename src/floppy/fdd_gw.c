@@ -33,23 +33,15 @@
 
 static fdc_t *gw_fdc;
 
-#ifdef ENABLE_GW_LOG
-int gw_do_log = ENABLE_GW_LOG;
-
 static void
 gw_log(const char *fmt, ...)
 {
     va_list ap;
 
-    if (gw_do_log) {
-        va_start(ap, fmt);
-        pclog_ex(fmt, ap);
-        va_end(ap);
-    }
+    va_start(ap, fmt);
+    pclog_ex(fmt, ap);
+    va_end(ap);
 }
-#else
-#    define gw_log(fmt, ...)
-#endif
 
 #ifdef __linux__
 
@@ -670,29 +662,56 @@ gw_read_physical_track(gw_t *dev, int cylinder, int side)
     static uint32_t flux_ticks[GW_MAX_FLUX_TICKS];
     static uint8_t  mfm_bits[GW_MAX_FLUX_TICKS * 4];
 
+    gw_log("GW: read_physical_track cyl=%d side=%d\n", cylinder, side);
+
     if (dev->current_cylinder != cylinder) {
-        if (gw_cmd_seek(dev, cylinder) < 0)
+        if (gw_cmd_seek(dev, cylinder) < 0) {
+            gw_log("GW: seek to cyl %d FAILED\n", cylinder);
             return -1;
+        }
         dev->current_cylinder = cylinder;
     }
 
-    if (gw_cmd_head(dev, side) < 0)
+    if (gw_cmd_head(dev, side) < 0) {
+        gw_log("GW: head select %d FAILED\n", side);
         return -1;
+    }
 
     int raw_len = gw_cmd_read_flux(dev, flux_raw, sizeof(flux_raw));
+    gw_log("GW: read_flux returned %d raw bytes\n", raw_len);
     if (raw_len <= 0)
         return -1;
 
+    /* Log first 32 raw bytes for debugging */
+    gw_log("GW: raw flux[0..31]:");
+    for (int i = 0; i < 32 && i < raw_len; i++)
+        gw_log(" %02X", flux_raw[i]);
+    gw_log("\n");
+
     int tick_count = gw_decode_flux_stream(flux_raw, raw_len, flux_ticks, GW_MAX_FLUX_TICKS);
+    gw_log("GW: decoded %d flux ticks from %d raw bytes\n", tick_count, raw_len);
     if (tick_count == 0)
         return -1;
 
+    /* Log first few tick values */
+    gw_log("GW: ticks[0..9]:");
+    for (int i = 0; i < 10 && i < tick_count; i++)
+        gw_log(" %u", flux_ticks[i]);
+    gw_log("\n");
+
+    gw_log("GW: PLL: sample_freq=%u data_rate=%d cell_width=%.1f\n",
+           dev->sample_freq, dev->data_rate,
+           (double) dev->sample_freq / ((double) dev->data_rate * 2.0));
+
     int bit_count = gw_flux_to_mfm(dev->sample_freq, dev->data_rate, flux_ticks, tick_count,
                                     mfm_bits, sizeof(mfm_bits));
+    gw_log("GW: PLL decoded %d MFM bits\n", bit_count);
     if (bit_count == 0)
         return -1;
 
     gw_parse_mfm_track(dev, mfm_bits, bit_count, side);
+    gw_log("GW: cyl=%d side=%d: found %d sectors\n",
+           cylinder, side, dev->cache.sector_count[side]);
     return 0;
 }
 
@@ -1192,9 +1211,12 @@ gw_load(int drive, char *fn)
     if (dev->sample_freq == 0)
         dev->sample_freq = 72000000;
 
-    gw_cmd_set_bus_type(dev, GW_BUS_IBMPC);
-    gw_cmd_select(dev);
-    gw_cmd_motor(dev, 1);
+    if (gw_cmd_set_bus_type(dev, GW_BUS_IBMPC) < 0)
+        gw_log("GW: SetBusType failed (non-fatal)\n");
+    if (gw_cmd_select(dev) < 0)
+        gw_log("GW: Select failed\n");
+    if (gw_cmd_motor(dev, 1) < 0)
+        gw_log("GW: Motor ON failed\n");
     dev->motor_on = 1;
 
     gw_detect_geometry(dev, drive);
