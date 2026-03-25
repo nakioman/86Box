@@ -913,6 +913,9 @@ main(int argc, char *argv[])
 
         cpu_thread_running = true;
         main_thread        = new std::thread(main_thread_fn);
+
+        if (mouse_auto_capture > 0)
+            plat_mouse_capture(1);
     });
 
     const auto ret = app.exec();
