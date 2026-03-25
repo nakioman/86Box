@@ -74,6 +74,7 @@
     <addaction name="actionRight_CTRL_is_left_ALT"/>
     <addaction name="separator"/>
     <addaction name="actionUpdate_mouse_every_CPU_frame"/>
+    <addaction name="actionAuto_capture_mouse"/>
     <addaction name="separator"/>
     <addaction name="actionAuto_pause"/>
     <addaction name="actionPause"/>
@@ -329,6 +330,14 @@
    </property>
    <property name="text">
     <string>&amp;Update mouse every CPU frame</string>
+   </property>
+  </action>
+  <action name="actionAuto_capture_mouse">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Auto-&amp;capture mouse on start</string>
    </property>
   </action>
   <action name="actionAuto_pause">

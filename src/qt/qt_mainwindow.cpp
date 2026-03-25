@@ -788,6 +788,9 @@ MainWindow::MainWindow(QWidget *parent)
     if (force_constant_mouse > 0) {
         ui->actionUpdate_mouse_every_CPU_frame->setChecked(true);
     }
+    if (mouse_auto_capture > 0) {
+        ui->actionAuto_capture_mouse->setChecked(true);
+    }
 
     if (!vnc_enabled)
         video_setblit(qt_blit);
@@ -800,6 +803,7 @@ MainWindow::MainWindow(QWidget *parent)
             }
         });
     }
+
 
 #ifdef MTR_ENABLED
     {
@@ -2165,6 +2169,14 @@ MainWindow::on_actionUpdate_mouse_every_CPU_frame_triggered()
     force_constant_mouse ^= 1;
     ui->actionUpdate_mouse_every_CPU_frame->setChecked(force_constant_mouse > 0 ? true : false);
     mouse_update_sample_rate();
+    config_save();
+}
+
+void
+MainWindow::on_actionAuto_capture_mouse_triggered()
+{
+    mouse_auto_capture ^= 1;
+    ui->actionAuto_capture_mouse->setChecked(mouse_auto_capture > 0 ? true : false);
     config_save();
 }
 

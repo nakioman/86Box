@@ -277,6 +277,7 @@ load_general(void)
 
     do_auto_pause = ini_section_get_int(cat, "do_auto_pause", 0);
     force_constant_mouse = ini_section_get_int(cat, "force_constant_mouse", 0);
+    mouse_auto_capture = ini_section_get_int(cat, "mouse_auto_capture", 0);
     fdd_sounds_enabled = ini_section_get_int(cat, "fdd_sounds_enabled", 1);
 
     p = ini_section_get_string(cat, "uuid", NULL);
@@ -2385,6 +2386,7 @@ config_load(void)
         dpi_scale            = 1;
         do_auto_pause        = 0;
         force_constant_mouse = 0;
+        mouse_auto_capture   = 0;
 
         cpu_override_interpreter = 0;
 
@@ -2726,6 +2728,11 @@ save_general(void)
         ini_section_set_int(cat, "force_constant_mouse", force_constant_mouse);
     else
         ini_section_delete_var(cat, "force_constant_mouse");
+
+    if (mouse_auto_capture)
+        ini_section_set_int(cat, "mouse_auto_capture", mouse_auto_capture);
+    else
+        ini_section_delete_var(cat, "mouse_auto_capture");
 
     if (fdd_sounds_enabled == 1)
         ini_section_delete_var(cat, "fdd_sounds_enabled");
