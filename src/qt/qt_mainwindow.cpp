@@ -1551,6 +1551,13 @@ MainWindow::eventFilter(QObject *receiver, QEvent *event)
     // Detect shortcuts when menubar is hidden
     // TODO: Could this be simplified by proxying the event and manually
     // shoving it into the menubar?
+    // When a modal dialog is active (e.g. file dialog), let events
+    // pass through normally so the dialog receives keyboard input.
+    // The VM should be paused before opening any modal dialog.
+    if ((event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)
+        && QApplication::activeModalWidget())
+        return false;
+
     if (event->type() == QEvent::KeyPress) {
         this->keyPressEvent((QKeyEvent *) event);
 
@@ -1667,6 +1674,7 @@ MainWindow::eventFilter(QObject *receiver, QEvent *event)
             releaseKeyboard();
         } else if (event->type() == QEvent::WindowUnblocked) {
             window_blocked = false;
+            keyboard_all_up();
             plat_pause(curdopause);
         }
     }

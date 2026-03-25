@@ -493,7 +493,9 @@ MediaMenu::floppyNewImage(int i)
 void
 MediaMenu::floppySelectImage(int i, bool wp)
 {
-    int was_captured = mouse_capture;
+    const int currentPause   = dopause;
+    const int currentCapture = mouse_capture;
+    plat_pause(1);
 
     auto filename = QFileDialog::getOpenFileName(
         parentWidget,
@@ -515,7 +517,8 @@ MediaMenu::floppySelectImage(int i, bool wp)
     if (!filename.isEmpty())
         floppyMount(i, filename, wp);
 
-    if (was_captured)
+    plat_pause(currentPause);
+    if (currentCapture)
         plat_mouse_capture(1);
 }
 
