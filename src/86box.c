@@ -327,6 +327,51 @@ struct accelKey def_acc_keys[NUM_ACCELS] = {
         .name="force_interpretation",
         .desc="Force interpretation",
         .seq="Ctrl+Alt+I"
+    },
+    {
+        .name="exit",
+        .desc="Exit",
+        .seq="Ctrl+Alt+X"
+    },
+    {
+        .name="floppy_1_image",
+        .desc="Floppy 1: Open image",
+        .seq="Ctrl+Alt+F2"
+    },
+    {
+        .name="floppy_2_image",
+        .desc="Floppy 2: Open image",
+        .seq=""
+    },
+    {
+        .name="floppy_3_image",
+        .desc="Floppy 3: Open image",
+        .seq=""
+    },
+    {
+        .name="floppy_4_image",
+        .desc="Floppy 4: Open image",
+        .seq=""
+    },
+    {
+        .name="floppy_1_eject",
+        .desc="Floppy 1: Eject",
+        .seq="Ctrl+Alt+Shift+F2"
+    },
+    {
+        .name="floppy_2_eject",
+        .desc="Floppy 2: Eject",
+        .seq=""
+    },
+    {
+        .name="floppy_3_eject",
+        .desc="Floppy 3: Eject",
+        .seq=""
+    },
+    {
+        .name="floppy_4_eject",
+        .desc="Floppy 4: Eject",
+        .seq=""
     }
 };
 
