@@ -928,8 +928,7 @@ void
 MainWindow::closeEvent(QCloseEvent *event)
 {
     if (mouse_capture) {
-        event->ignore();
-        return;
+        plat_mouse_capture(0);
     }
 
     if (confirm_exit && confirm_exit_cmdl && cpu_thread_run) {
@@ -1012,6 +1011,7 @@ MainWindow::updateShortcuts()
     ui->actionPause->setShortcut(QKeySequence());
     ui->actionMute_Unmute->setShortcut(QKeySequence());
     ui->actionForce_interpretation->setShortcut(QKeySequence());
+    ui->actionExit->setShortcut(QKeySequence());
 
     int          accID;
     QKeySequence seq;
@@ -1063,6 +1063,10 @@ MainWindow::updateShortcuts()
     accID = FindAccelerator("force_interpretation");
     seq   = QKeySequence::fromString(acc_keys[accID].seq);
     ui->actionForce_interpretation->setShortcut(seq);
+
+    accID = FindAccelerator("exit");
+    seq   = QKeySequence::fromString(acc_keys[accID].seq);
+    ui->actionExit->setShortcut(seq);
 }
 
 void
@@ -1556,6 +1560,24 @@ MainWindow::eventFilter(QObject *receiver, QEvent *event)
             QKeyEvent *ke = (QKeyEvent *) event;
             if ((QKeySequence) (ke->key() | (ke->modifiers() & ~Qt::KeypadModifier)) == FindAcceleratorSeq("release_mouse") || (QKeySequence) (ke->key() | ke->modifiers()) == FindAcceleratorSeq("release_mouse")) {
                 plat_mouse_capture(0);
+            }
+            if ((QKeySequence) (ke->key() | (ke->modifiers() & ~Qt::KeypadModifier)) == FindAcceleratorSeq("exit")
+                || (QKeySequence) (ke->key() | ke->modifiers()) == FindAcceleratorSeq("exit")) {
+                close();
+                return true;
+            }
+            for (int i = 0; i < 4; i++) {
+                char accelName[32];
+                snprintf(accelName, sizeof(accelName), "floppy_%d_image", i + 1);
+                if ((QKeySequence) (ke->key() | (ke->modifiers() & ~Qt::KeypadModifier)) == FindAcceleratorSeq(accelName)
+                    || (QKeySequence) (ke->key() | ke->modifiers()) == FindAcceleratorSeq(accelName)) {
+                    MediaMenu::ptr->floppySelectImage(i, false);
+                }
+                snprintf(accelName, sizeof(accelName), "floppy_%d_eject", i + 1);
+                if ((QKeySequence) (ke->key() | (ke->modifiers() & ~Qt::KeypadModifier)) == FindAcceleratorSeq(accelName)
+                    || (QKeySequence) (ke->key() | ke->modifiers()) == FindAcceleratorSeq(accelName)) {
+                    MediaMenu::ptr->floppyEject(i);
+                }
             }
         }
 

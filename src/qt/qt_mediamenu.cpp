@@ -22,6 +22,7 @@
 #include <QMenu>
 #include <QFile>
 #include <QFileDialog>
+#include <QKeySequence>
 #include <QMessageBox>
 #include <QStringBuilder>
 #include <QApplication>
@@ -140,7 +141,14 @@ MediaMenu::refresh(QMenu *parentMenu)
         QIcon img_icon = fdd_is_525(i) ? QIcon(":/settings/qt/icons/floppy_525_image.ico") : QIcon(":/settings/qt/icons/floppy_35_image.ico");
         menu->addAction(getIconWithIndicator(img_icon, pixmap_size, QIcon::Normal, New), tr("&New image…"), [this, i]() { floppyNewImage(i); });
         menu->addSeparator();
-        menu->addAction(getIconWithIndicator(img_icon, pixmap_size, QIcon::Normal, Browse), tr("&Existing image…"), [this, i]() { floppySelectImage(i, false); });
+        {
+            char accelName[32];
+            snprintf(accelName, sizeof(accelName), "floppy_%d_image", i + 1);
+            int accID = FindAccelerator(accelName);
+            auto *browseAction = menu->addAction(getIconWithIndicator(img_icon, pixmap_size, QIcon::Normal, Browse), tr("&Existing image…"), [this, i]() { floppySelectImage(i, false); });
+            if (accID >= 0 && acc_keys[accID].seq[0])
+                browseAction->setShortcut(QKeySequence::fromString(acc_keys[accID].seq));
+        }
         menu->addAction(getIconWithIndicator(img_icon, pixmap_size, QIcon::Normal, WriteProtectedBrowse), tr("Existing image (&Write-protected)…"), [this, i]() { floppySelectImage(i, true); });
         menu->addSeparator();
         for (int slot = 0; slot < MAX_PREV_IMAGES; slot++) {
@@ -152,7 +160,14 @@ MediaMenu::refresh(QMenu *parentMenu)
         menu->addAction(getIconWithIndicator(img_icon, pixmap_size, QIcon::Normal, Export), tr("E&xport to 86F…"), [this, i]() { floppyExportTo86f(i); });
         menu->addSeparator();
         floppyEjectPos = menu->children().count();
-        menu->addAction(getIconWithIndicator(img_icon, pixmap_size, QIcon::Normal, Eject), tr("E&ject"), [this, i]() { floppyEject(i); });
+        {
+            char accelName[32];
+            snprintf(accelName, sizeof(accelName), "floppy_%d_eject", i + 1);
+            int accID = FindAccelerator(accelName);
+            auto *ejectAction = menu->addAction(getIconWithIndicator(img_icon, pixmap_size, QIcon::Normal, Eject), tr("E&ject"), [this, i]() { floppyEject(i); });
+            if (accID >= 0 && acc_keys[accID].seq[0])
+                ejectAction->setShortcut(QKeySequence::fromString(acc_keys[accID].seq));
+        }
         floppyMenus[i] = menu;
         floppyUpdateMenu(i);
     });
@@ -478,6 +493,8 @@ MediaMenu::floppyNewImage(int i)
 void
 MediaMenu::floppySelectImage(int i, bool wp)
 {
+    int was_captured = mouse_capture;
+
     auto filename = QFileDialog::getOpenFileName(
         parentWidget,
         QString(),
@@ -497,6 +514,9 @@ MediaMenu::floppySelectImage(int i, bool wp)
 
     if (!filename.isEmpty())
         floppyMount(i, filename, wp);
+
+    if (was_captured)
+        plat_mouse_capture(1);
 }
 
 void
