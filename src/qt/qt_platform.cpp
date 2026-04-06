@@ -52,7 +52,7 @@
 
 #include "qt_rendererstack.hpp"
 #include "qt_mainwindow.hpp"
-#include "qt_progsettings.hpp"
+#include "qt_preferences.hpp"
 #include "qt_util.hpp"
 
 #ifndef Q_OS_WINDOWS
@@ -470,6 +470,8 @@ void
 path_normalize(char *path)
 {
 #ifdef Q_OS_WINDOWS
+    if (plat_is_block_device(path))
+        return;
     if (strstr(path, "ioctl://") != path) {
         while (*path++ != 0) {
             if (*path == '\\')
@@ -699,7 +701,6 @@ plat_power_off(void)
     confirm_exit_cmdl = 0;
     hdd_image_sync_all();
     nvr_save();
-    config_save();
 
     /* Deduct a sufficiently large number of cycles that no instructions will
        run before the main thread is terminated */
@@ -713,14 +714,14 @@ plat_power_off(void)
 int
 plat_language_code(char *langcode)
 {
-    return ProgSettings::languageCodeToId(QString(langcode));
+    return Preferences::languageCodeToId(QString(langcode));
 }
 
 /* Converts the numeric language ID to a language code string */
 void
 plat_language_code_r(int id, char *outbuf, int len)
 {
-    qstrncpy(outbuf, ProgSettings::languageIdToCode(id).toUtf8().constData(), len);
+    qstrncpy(outbuf, Preferences::languageIdToCode(id).toUtf8().constData(), len);
     return;
 }
 
@@ -830,10 +831,10 @@ c16stombs(char dst[], const uint16_t src[], int len)
 #    define LIB_NAME_PCAP "libpcap"
 #endif
 
-QMap<int, std::wstring> ProgSettings::translatedstrings;
+QMap<int, std::wstring> Preferences::translatedstrings;
 
 void
-ProgSettings::reloadStrings()
+Preferences::reloadStrings()
 {
     translatedstrings.clear();
     translatedstrings[STRING_MOUSE_CAPTURE]             = QCoreApplication::translate("", "Click to capture mouse").toStdWString();
@@ -864,9 +865,9 @@ ProgSettings::reloadStrings()
 wchar_t *
 plat_get_string(int i)
 {
-    if (ProgSettings::translatedstrings.empty())
-        ProgSettings::reloadStrings();
-    return ProgSettings::translatedstrings[i].data();
+    if (Preferences::translatedstrings.empty())
+        Preferences::reloadStrings();
+    return Preferences::translatedstrings[i].data();
 }
 
 int

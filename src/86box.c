@@ -556,8 +556,6 @@ fatal(const char *fmt, ...)
 
     nvr_save();
 
-    config_save();
-
 #ifdef ENABLE_808X_LOG
     dumpregs(1);
 #endif
@@ -599,8 +597,6 @@ fatal_ex(const char *fmt, va_list ap)
     fflush(stdlog);
 
     nvr_save();
-
-    config_save();
 
 #ifdef ENABLE_808X_LOG
     dumpregs(1);
@@ -716,7 +712,7 @@ delete_nvr_file(uint8_t flash)
 
     /* Set up the NVR file's name. */
     c       = strlen(machine_get_nvr_name()) + 5;
-    fn      = (char *) malloc(c + 1);
+    fn      = (char *) calloc(1, c + 1);
 
     if (fn == NULL)
         fatal("Error allocating memory for the removal of the %s file\n",
@@ -1583,6 +1579,8 @@ pc_init_modules(void)
 void
 pc_send_ca(uint16_t sc)
 {
+    keyboard_toggle_override();
+
     if (keyboard_mode >= 0x81) {
         /* Use R-Alt because PS/55 DOS and OS/2 assign L-Alt Kanji */
         keyboard_input(1, 0x1D);  /*  Ctrl key pressed */
@@ -1629,6 +1627,8 @@ pc_send_ca(uint16_t sc)
         if (keyboard_get_in_reset())
             return;
     }
+
+    keyboard_toggle_override();
 }
 
 /* Send the machine a Control-Alt-DEL sequence. */
@@ -1981,8 +1981,6 @@ pc_close(UNUSED(thread_t *ptr))
     is_quit = 1;
 
     nvr_save();
-
-    config_save();
 
     plat_mouse_capture(0);
 

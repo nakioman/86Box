@@ -552,7 +552,57 @@ load_video(void)
             strcpy(p, "cl_gd5422_boca_isa");
             free_p = 1;
         }
-        gfxcard[0] = video_get_video_from_internal_name(p);
+        const device_t *gfx_dev = video_get_video_from_old_internal_name(p);
+        if (gfx_dev == NULL) {
+            if (!strcmp(p, "et4000ax_tc6058af")) {
+                gfxcard[0] = video_get_video_from_internal_name("et4000ax");
+                ini_section_t old  = ini_find_section(config, "Tseng Labs ET4000AX (TC6058AF) (ISA)");
+                ini_section_t new  = ini_find_section(config, "Tseng Labs ET4000AX (ISA)");
+                char *        bios = ini_section_get_string(old, "bios_ver", "v1_10");
+                int           mem  = ini_section_get_int(old, "memory", 512);
+                if (new == NULL)
+                    new = ini_find_or_create_section(config, "Tseng Labs ET4000AX (ISA)");
+                ini_section_set_string(new, "bios", bios);
+                ini_section_set_int(new, "memory", mem);
+                if (old != NULL) {
+                    ini_section_delete_var(old, "bios_ver");
+                    ini_section_delete_var(old, "memory");
+                    ini_delete_section_if_empty(config, "Tseng Labs ET4000AX (TC6058AF) (ISA)");
+                }
+            } else if (!strcmp(p, "tgkorvga") || !strcmp(p, "et4000k_tg286_isa") || !strcmp(p, "kasan16vga")) {
+                gfxcard[0] = video_get_video_from_internal_name("et4000ax");
+                char *        on   = NULL;
+                if (!strcmp(p, "tgkorvga"))
+                    on = "TriGem Korean VGA (Tseng Labs ET4000AX Korean)";
+                else if (!strcmp(p, "et4000k_tg286_isa"))
+                    on = "TriGem Korean VGA (TriGem 286M)";
+                else
+                    on = "Kasan Hangulmadang-16 VGA (Tseng Labs ET4000AX Korean)";
+                ini_section_t old  = ini_find_section(config, on);
+                ini_section_t new  = ini_find_section(config, "Tseng Labs ET4000AX (ISA)");
+                int           mem  = ini_section_get_int(old, "memory", 512);
+                if (new == NULL)
+                    new = ini_find_or_create_section(config, "Tseng Labs ET4000AX (ISA)");
+                ini_section_set_string(new, "bios", p);
+                ini_section_set_int(new, "memory", mem);
+                if (old != NULL) {
+                    ini_section_delete_var(old, "memory");
+                    ini_delete_section_if_empty(config, on);
+                }
+            } else {
+                gfxcard[0] = video_get_video_from_internal_name(p);
+                if (!strcmp(p, "et4000ax")) {
+                    ini_section_t new  = ini_find_section(config, "Tseng Labs ET4000AX (ISA)");
+                    char *        bios = ini_section_get_string(new, "bios_ver", "v8_01");
+                    if (strcmp(bios, "v8_01"))
+                        ini_section_set_string(new, "bios", bios);
+                    ini_section_delete_var(new, "bios_ver");
+                }
+            }
+        } else {
+            device_video_config_migrate(gfx_dev, p, 0);
+            gfxcard[0] = video_get_video_from_internal_name((char *) gfx_dev->internal_name);
+        }
         if (free_p) {
             free(p);
             p = NULL;
@@ -583,7 +633,13 @@ load_video(void)
         p = ini_section_get_string(cat, "gfxcard_2", NULL);
         if (!p)
             p = "none";
-        gfxcard[i] = video_get_video_from_internal_name(p);
+        const device_t *gfx_dev = video_get_video_from_old_internal_name(p);
+        if (gfx_dev == NULL)
+            gfxcard[i] = video_get_video_from_internal_name(p);
+        else {
+            device_video_config_migrate(gfx_dev, p, 0);
+            gfxcard[i] = video_get_video_from_internal_name((char *) gfx_dev->internal_name);
+        }
     }
 
     monitor_edid = ini_section_get_int(cat, "monitor_edid", 0);
@@ -820,7 +876,13 @@ load_network(void)
     /* Handle legacy configuration which supported only one NIC */
     p = ini_section_get_string(cat, "net_card", NULL);
     if (p != NULL) {
-        nc->device_num = network_card_get_from_internal_name(p);
+        const device_t *nc_dev = network_card_get_from_old_internal_name(p);
+        if (nc_dev == NULL)
+            nc->device_num = network_card_get_from_internal_name(p);
+        else {
+            device_video_config_migrate(nc_dev, p, 0);
+            nc->device_num = network_card_get_from_internal_name((char *) nc_dev->internal_name);
+        }
 
         p = ini_section_get_string(cat, "net_type", NULL);
         if (p != NULL) {
@@ -978,6 +1040,13 @@ load_ports(void)
 
         if (serial_passthrough_enabled[c])
             config_log("Serial Port %d: passthrough enabled.\n\n", c + 1);
+
+        /* The addition of Windows named pipe client mode in v5.3 made a mess
+           of the enum IDs. Migrate the old HOSTSER ID (now TCP_CLNT) to the
+           new one. The section is migrated to the new name by device.c later. */
+        sprintf(temp, "Serial Passthrough Device #%i", c + 1);
+        if (ini_get_int(config, temp, "mode", 0) == 3)
+            ini_set_int(config, temp, "mode", SERPT_MODE_HOSTSER);
     }
 
     for (int c = 0; c < PARALLEL_MAX; c++) {

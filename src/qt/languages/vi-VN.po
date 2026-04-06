@@ -1,7 +1,7 @@
 msgid ""
 msgstr ""
-"PO-Revision-Date: 2026-03-10 14:03+0000\n"
-"Last-Translator: OBattler <oubattler@gmail.com>\n"
+"PO-Revision-Date: 2026-04-05 18:51+0000\n"
+"Last-Translator: Alexander Babikov <lemondrops358@gmail.com>\n"
 "Language-Team: Vietnamese <https://weblate.86box.net/projects/86box/86box/vi/"
 ">\n"
 "Language: vi-VN\n"
@@ -145,52 +145,43 @@ msgstr "Căn tỷ lệ số nguyên"
 msgid "4:&3 Integer scale"
 msgstr "Căn tỷ lệ 4:3 số nguyên"
 
-msgid "EGA/(S)&VGA settings"
-msgstr "Cài đặt EGA/(S)&VGA"
+msgid "Inverted VGA monitor"
+msgstr "Đảo màu VGA"
 
-msgid "&Inverted VGA monitor"
-msgstr "Đảo mà&u VGA"
+msgid "VGA screen type:"
+msgstr "Loại màn VGA:"
 
-msgid "VGA screen &type"
-msgstr "L&oại màn VGA"
-
-msgid "RGB &Color"
-msgstr "Màu R&GB"
+msgid "RGB Color"
+msgstr "Màu RGB"
 
 msgid "RGB (no brown)"
 msgstr "RGB (không nâu)"
 
-msgid "&RGB Grayscale"
-msgstr "Thang xám RG&B"
+msgid "RGB Grayscale"
+msgstr "Thang xám RGB"
 
 msgid "Generic RGBI color monitor"
 msgstr "Màn hình màu RGBI chung"
 
-msgid "&Amber monitor"
+msgid "Amber monitor"
 msgstr "Màn hình vàng hổ phách (amber)"
 
-msgid "&Green monitor"
+msgid "Green monitor"
 msgstr "Màn hình lục"
 
-msgid "&White monitor"
+msgid "White monitor"
 msgstr "Màn hinh trắng"
 
-msgid "Grayscale &conversion type"
-msgstr "Chuyển đổi thang &màu xám"
+msgid "Grayscale conversion type:"
+msgstr "Chuyển đổi thang màu xám:"
 
-msgid "BT&601 (NTSC/PAL)"
-msgstr "BT&601 (NTSC/PAL)"
+msgid "Average"
+msgstr "Trung bình"
 
-msgid "BT&709 (HDTV)"
-msgstr "BT&709 (HDTV)"
+msgid "Overscan"
+msgstr "Overscan"
 
-msgid "&Average"
-msgstr "&Trung bình"
-
-msgid "CGA/PCjr/Tandy/E&GA/(S)VGA overscan"
-msgstr "&Overscan CGA/PCjr/Tandy/EGA/(S)VGA"
-
-msgid "Change contrast for &monochrome display"
+msgid "Change contrast for monochrome display"
 msgstr "Chỉnh tương phản cho màn hình đơn sắc"
 
 msgid "&Media"
@@ -364,6 +355,21 @@ msgstr "Hiệu suất"
 msgid "Machine type:"
 msgstr "Loại máy:"
 
+msgid "[1989] i486 (Socket 168 and 1)"
+msgstr ""
+
+msgid "[1994] i486 (Miscellaneous)"
+msgstr ""
+
+msgid "[1995] Socket 7 (Single Voltage)"
+msgstr ""
+
+msgid "[1996] Socket 7 (Dual Voltage)"
+msgstr ""
+
+msgid "Miscellaneous"
+msgstr ""
+
 msgid "Machine:"
 msgstr "Mẫu máy:"
 
@@ -433,8 +439,8 @@ msgstr "Video:"
 msgid "Video #2:"
 msgstr "Video 2:"
 
-msgid "Accelerators"
-msgstr "Bộ tăng tốc"
+msgid "Monitor"
+msgstr "Màn hình"
 
 msgid "Voodoo 1 or 2 Graphics"
 msgstr "Đồ họa Voodoo 1 hoặc 2"
@@ -514,62 +520,53 @@ msgstr "Nuked (chính xác hơn)"
 msgid "YMFM (faster)"
 msgstr "YMFM (nhanh hơn)"
 
-msgid "COM1 Device:"
-msgstr "Thiết bị COM1:"
-
-msgid "COM2 Device:"
-msgstr "Thiết bị COM2:"
-
-msgid "COM3 Device:"
-msgstr "Thiết bị COM3:"
-
-msgid "COM4 Device:"
-msgstr "Thiết bị COM4:"
-
-msgid "LPT1 Device:"
-msgstr "Thiết bị LPT1:"
-
-msgid "LPT2 Device:"
-msgstr "Thiết bị LPT2:"
-
-msgid "LPT3 Device:"
-msgstr "Thiết bị LPT3:"
-
-msgid "LPT4 Device:"
-msgstr "Thiết bị LPT4:"
-
 msgid "Internal LPT ECP DMA:"
 msgstr "LPT ECP DMA nội bộ:"
-
-msgid "Serial port 1"
-msgstr "Cổng serial 1"
-
-msgid "Serial port 2"
-msgstr "Cổng serial 2"
-
-msgid "Serial port 3"
-msgstr "Cổng serial 3"
-
-msgid "Serial port 4"
-msgstr "Cổng serial 4"
-
-msgid "Parallel port 1"
-msgstr "Cổng parallel 1"
-
-msgid "Parallel port 2"
-msgstr "Cổng parallel 2"
-
-msgid "Parallel port 3"
-msgstr "Cổng parallel 3"
-
-msgid "Parallel port 4"
-msgstr "Cổng parallel 4"
 
 msgid "Floppy disk controller:"
 msgstr "Bộ điều khiển ổ mềm:"
 
 msgid "CD-ROM controller:"
 msgstr "Bộ điều khiển CD-ROM:"
+
+msgid "Mitsumi interface"
+msgstr ""
+
+msgid "MKE/Panasonic interface"
+msgstr ""
+
+msgid "MKE/Panasonic interface (Creative)"
+msgstr ""
+
+msgid "IDE Controller"
+msgstr "Bộ điều khiển IDE"
+
+msgid "IDE Controller (Dual-Channel)"
+msgstr ""
+
+msgid "PC/AT IDE Controller"
+msgstr ""
+
+msgid "PC/AT IDE Controller (Dual-Channel)"
+msgstr ""
+
+msgid "PC/AT XTIDE (Primary Only)"
+msgstr ""
+
+msgid "PS/2 AT XTIDE (1.1.5) (Primary Only)"
+msgstr ""
+
+msgid "CMD PCI-0646 (Tertiary and Quaternary)"
+msgstr ""
+
+msgid "CMD PCI-0648 (Tertiary and Quaternary)"
+msgstr ""
+
+msgid "CMD PCI-0649 (Tertiary and Quaternary)"
+msgstr ""
+
+msgid "McIDE Controller"
+msgstr ""
 
 msgid "Tertiary IDE Controller"
 msgstr "Bộ điều khiển IDE thứ ba"
@@ -603,6 +600,9 @@ msgstr "Đĩa cứng:"
 
 msgid "Firmware Version"
 msgstr "Phiên bản firmware"
+
+msgid "DSP Version"
+msgstr "Phiên bản DSP"
 
 msgid "&New…"
 msgstr "Tạ&o mới…"
@@ -1059,10 +1059,6 @@ msgstr "Cần có %1 để tự động chuyển đổi file PCL qua PDF.\n\nM�
 
 msgid "Don't show this message again"
 msgstr "Không hiện thông báo này nữa"
-
-#, fuzzy
-msgid "Reset"
-msgstr "Khởi động lại"
 
 msgid "CD-ROM images"
 msgstr "Ảnh đĩa CD-ROM"
@@ -1823,18 +1819,6 @@ msgstr "Trình kiểm tra đơn vị 86box"
 msgid "Novell NetWare 2.x Key Card"
 msgstr "Thẻ khóa Novell Netware 2.x"
 
-msgid "Serial port passthrough 1"
-msgstr "Thông qua cổng serial 1"
-
-msgid "Serial port passthrough 2"
-msgstr "Thông qua cổng serial 2"
-
-msgid "Serial port passthrough 3"
-msgstr "Thông qua cổng serial 3"
-
-msgid "Serial port passthrough 4"
-msgstr "Thông qua cổng serial 4"
-
 msgid "Renderer &options…"
 msgstr "Tùy chọn kết xuất…"
 
@@ -1984,6 +1968,9 @@ msgstr "Phiên bản BIOS"
 
 msgid "BIOS Language"
 msgstr "Ngôn ngữ BIOS"
+
+msgid "Variant"
+msgstr ""
 
 msgid "IBM 5161 Expansion Unit"
 msgstr "Bộ mở rộng IBM 5161"
@@ -2248,9 +2235,6 @@ msgstr "Kích thước bộ nhớ"
 
 msgid "EMU8000 Address"
 msgstr "Địa chỉ EMU8000"
-
-msgid "IDE Controller"
-msgstr "Bộ điều khiển IDE"
 
 msgid "Codec"
 msgstr "Codec"
@@ -2636,6 +2620,9 @@ msgstr "Tiêu chuẩn"
 msgid "High-Speed"
 msgstr "Tốc độ cao"
 
+msgid "LPT DAC / Covox Speech Thing"
+msgstr "LPT DAC / Covox Speech Thing"
+
 msgid "Stereo LPT DAC"
 msgstr "STEREO LPT DAC"
 
@@ -2648,8 +2635,8 @@ msgstr "Máy in generic ESC/P 2 ma trận chấm"
 msgid "Generic PostScript Printer"
 msgstr "Máy in generic PostScript"
 
-msgid "Generic PCL5e Printer"
-msgstr "Máy in generic PCL5E"
+msgid "Generic PCL Printer"
+msgstr "Máy in generic PCL"
 
 msgid "Parallel Line Internet Protocol"
 msgstr "Parallel Line Internet Protocol"
@@ -2657,7 +2644,11 @@ msgstr "Parallel Line Internet Protocol"
 msgid "Protection Dongle for Savage Quest"
 msgstr "Dongle bảo vệ cho Savage Quest"
 
-msgid "Serial Passthrough Device"
+msgid "Loopback Plug"
+msgstr ""
+
+#, fuzzy
+msgid "Serial Passthrough"
 msgstr "Thiết bị thông qua cổng serial"
 
 msgid "Passthrough Mode"
@@ -2747,6 +2738,12 @@ msgstr "Mở rộng bộ nhớ chung qua PC/XT"
 msgid "Generic PC/AT Memory Expansion"
 msgstr "Mở rộng bộ nhớ chung qua PC/AT"
 
+msgid "Generic MM58167 RTC"
+msgstr ""
+
+msgid "OPL2Board (External Device)"
+msgstr ""
+
 msgid "Unable to find Dot-Matrix fonts"
 msgstr "Không tìm thấy phông chữ ma trận chấm"
 
@@ -2809,6 +2806,12 @@ msgstr "Chuyển xuống"
 
 msgid "Could not load file %1"
 msgstr "Không thể nạp tập tin %1"
+
+msgid "Emulator"
+msgstr ""
+
+msgid "Input"
+msgstr ""
 
 msgid "Key bindings"
 msgstr "Phím nóng"
@@ -2987,6 +2990,9 @@ msgstr "Hệ thống sẽ không được thêm."
 msgid "&Update mouse every CPU frame"
 msgstr "&Cập nhật chuột mỗi cỡ khung CPU"
 
+msgid "Composite CGA"
+msgstr ""
+
 msgid "Hue"
 msgstr "Màu sắc"
 
@@ -3002,11 +3008,8 @@ msgstr "Độ sáng"
 msgid "Sharpness"
 msgstr "Độ sắc nét"
 
-msgid "&CGA composite settings…"
-msgstr "Cài đặt chế độ tổng hợp &CGA…"
-
-msgid "CGA composite settings"
-msgstr "Cài đặt chế độ tổng hợp CGA"
+msgid "Reset"
+msgstr ""
 
 msgid "Monitor EDID"
 msgstr "EDID của màn hình"
@@ -3035,9 +3038,6 @@ msgstr "Ánh sáng"
 msgid "Dark"
 msgstr "Tối"
 
-msgid "Search:"
-msgstr "Tìm:"
-
 msgid "Force interpretation"
 msgstr "Buộc giải thích"
 
@@ -3061,3 +3061,6 @@ msgstr "Để thay đổi thư mục hệ thống, hãy tắt tất cả các m�
 
 msgid "Raw"
 msgstr "Thô"
+
+msgid "Use EDC/ECC emulation"
+msgstr ""
