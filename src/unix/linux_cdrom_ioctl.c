@@ -38,6 +38,9 @@
 #include <86box/plat_cdrom_ioctl.h>
 #include <86box/scsi_device.h>
 
+#define IOCTL_CACHE_SECTORS  16
+#define IOCTL_CACHE_BUF_SIZE (IOCTL_CACHE_SECTORS * 2368)
+
 typedef struct ioctl_t {
     cdrom_t  *dev;
     void     *log;
@@ -49,6 +52,21 @@ typedef struct ioctl_t {
     char      path[256];
     pthread_t poll_tid;
     int       poll_active;
+    /* Double-buffered read-ahead cache with background prefetch. */
+    uint32_t        cache_lba;
+    int             cache_count;
+    uint8_t        *cache_buf;
+    uint8_t        *prefetch_buf;
+    uint8_t         cache_data[2][IOCTL_CACHE_BUF_SIZE];
+    uint32_t        prefetch_lba;
+    int             prefetch_count;
+    int             prefetch_pending;
+    int             prefetch_ready;
+    int             prefetch_shutdown;
+    pthread_t       prefetch_tid;
+    pthread_mutex_t prefetch_mutex;
+    pthread_cond_t  prefetch_start;
+    pthread_cond_t  prefetch_done;
 } ioctl_t;
 
 static int ioctl_read_dvd_structure(const void *local, uint8_t layer, uint8_t format,
@@ -238,8 +256,15 @@ ioctl_read_raw_toc(ioctl_t *ioctl)
     ioctl->is_dvd = (ioctl_read_dvd_structure(ioctl, 0, 0, buffer, NULL) > 0);
     free(buffer);
 
-    ioctl->has_audio  = 0;
-    ioctl->blocks_num = 0;
+    ioctl->has_audio   = 0;
+    ioctl->blocks_num  = 0;
+    ioctl->cache_count = 0;
+
+    /* Invalidate any in-flight prefetch. */
+    pthread_mutex_lock(&ioctl->prefetch_mutex);
+    ioctl->prefetch_ready = 0;
+    pthread_mutex_unlock(&ioctl->prefetch_mutex);
+
     memset(ioctl->cur_rti, 0x00, 65536);
 
     if (!ioctl->is_dvd) {
@@ -385,6 +410,125 @@ ioctl_is_track_audio(const ioctl_t *ioctl, const uint32_t pos)
     return ret;
 }
 
+/* Background prefetch thread — reads the next cache block ahead of time. */
+static void *
+ioctl_prefetch_thread(void *arg)
+{
+    ioctl_t *ioctl = (ioctl_t *) arg;
+
+    pthread_mutex_lock(&ioctl->prefetch_mutex);
+    while (!ioctl->prefetch_shutdown) {
+        while (!ioctl->prefetch_pending && !ioctl->prefetch_shutdown)
+            pthread_cond_wait(&ioctl->prefetch_start, &ioctl->prefetch_mutex);
+
+        if (ioctl->prefetch_shutdown)
+            break;
+
+        uint32_t lba    = ioctl->prefetch_lba;
+        int      is_dvd = ioctl->is_dvd;
+        int      fd     = ioctl->fd;
+        uint8_t *dst    = ioctl->prefetch_buf;
+        pthread_mutex_unlock(&ioctl->prefetch_mutex);
+
+        /* Perform the I/O without holding the lock. */
+        int count = 0;
+        if (is_dvd) {
+            ssize_t nread = pread(fd, dst,
+                                  (size_t) IOCTL_CACHE_SECTORS * COOKED_SECTOR_SIZE,
+                                  (off_t) lba * COOKED_SECTOR_SIZE);
+            if (nread >= COOKED_SECTOR_SIZE)
+                count = (int) (nread / COOKED_SECTOR_SIZE);
+        } else {
+            uint8_t cdb[12]   = { 0 };
+            uint8_t sense[64] = { 0 };
+            int     sense_len = 0;
+
+            cdb[0]  = 0xbe;                         /* READ CD */
+            cdb[2]  = (lba >> 24) & 0xff;
+            cdb[3]  = (lba >> 16) & 0xff;
+            cdb[4]  = (lba >> 8) & 0xff;
+            cdb[5]  = lba & 0xff;
+            cdb[8]  = IOCTL_CACHE_SECTORS;
+            cdb[9]  = 0xf8;
+            cdb[10] = 0x02;
+
+            if (sg_io_cmd(fd, cdb, 12, dst, IOCTL_CACHE_BUF_SIZE,
+                          SG_DXFER_FROM_DEV, sense, &sense_len)
+                && sense_len == 0)
+                count = IOCTL_CACHE_SECTORS;
+        }
+
+        pthread_mutex_lock(&ioctl->prefetch_mutex);
+        ioctl->prefetch_count   = count;
+        ioctl->prefetch_lba     = lba;
+        ioctl->prefetch_ready   = 1;
+        ioctl->prefetch_pending = 0;
+        pthread_cond_signal(&ioctl->prefetch_done);
+    }
+    pthread_mutex_unlock(&ioctl->prefetch_mutex);
+
+    return NULL;
+}
+
+/*
+ * Request the prefetch thread to start reading at the given LBA.
+ * No-op if a prefetch is already in progress.
+ */
+static void
+ioctl_trigger_prefetch(ioctl_t *ioctl, uint32_t lba)
+{
+    pthread_mutex_lock(&ioctl->prefetch_mutex);
+    if (!ioctl->prefetch_pending) {
+        ioctl->prefetch_lba     = lba;
+        ioctl->prefetch_pending = 1;
+        ioctl->prefetch_ready   = 0;
+        pthread_cond_signal(&ioctl->prefetch_start);
+    }
+    pthread_mutex_unlock(&ioctl->prefetch_mutex);
+}
+
+/*
+ * Try to promote the prefetch buffer to the primary cache.
+ * If a prefetch is in progress for the requested LBA, wait for it.
+ * Returns 1 if the primary cache now contains the sector, 0 otherwise.
+ */
+static int
+ioctl_try_promote_prefetch(ioctl_t *ioctl, uint32_t lba)
+{
+    int promoted = 0;
+
+    pthread_mutex_lock(&ioctl->prefetch_mutex);
+
+    if (ioctl->prefetch_ready &&
+        lba >= ioctl->prefetch_lba &&
+        lba < ioctl->prefetch_lba + (uint32_t) ioctl->prefetch_count) {
+        promoted = 1;
+    } else if (ioctl->prefetch_pending &&
+               lba >= ioctl->prefetch_lba &&
+               lba < ioctl->prefetch_lba + IOCTL_CACHE_SECTORS) {
+        /* Prefetch is in flight for our range — wait for it. */
+        while (!ioctl->prefetch_ready && !ioctl->prefetch_shutdown)
+            pthread_cond_wait(&ioctl->prefetch_done, &ioctl->prefetch_mutex);
+        if (ioctl->prefetch_ready &&
+            lba >= ioctl->prefetch_lba &&
+            lba < ioctl->prefetch_lba + (uint32_t) ioctl->prefetch_count)
+            promoted = 1;
+    }
+
+    if (promoted) {
+        /* Swap buffers. */
+        uint8_t *tmp        = ioctl->cache_buf;
+        ioctl->cache_buf    = ioctl->prefetch_buf;
+        ioctl->prefetch_buf = tmp;
+        ioctl->cache_lba    = ioctl->prefetch_lba;
+        ioctl->cache_count  = ioctl->prefetch_count;
+        ioctl->prefetch_ready = 0;
+    }
+
+    pthread_mutex_unlock(&ioctl->prefetch_mutex);
+    return promoted;
+}
+
 /* Shared functions (cdrom_ops_t interface). */
 static int
 ioctl_get_track_info(const void *local, const uint32_t track,
@@ -474,8 +618,8 @@ ioctl_is_track_pre(const void *local, const uint32_t sector)
 static int
 ioctl_read_sector(const void *local, uint8_t *buffer, uint32_t const sector)
 {
-    const ioctl_t          *ioctl   = (const ioctl_t *) local;
-    const raw_track_info_t *rti     = (raw_track_info_t *) ioctl->cur_rti;
+    ioctl_t                *ioctl   = (ioctl_t *) local;
+    const raw_track_info_t *rti     = (const raw_track_info_t *) ioctl->cur_rti;
     const int               sc_offs = (sector == 0xffffffff) ? 0 : 2352;
     int                     len     = (sector == 0xffffffff) ? 16 : 2368;
     int                     m       = 0;
@@ -504,12 +648,44 @@ ioctl_read_sector(const void *local, uint8_t *buffer, uint32_t const sector)
             track = ioctl_get_track(ioctl, lba);
 
             if (track != -1) {
-                ssize_t nread = pread(ioctl->fd, &(buffer[16]),
-                                      COOKED_SECTOR_SIZE,
-                                      (off_t) lba * COOKED_SECTOR_SIZE);
-                if (nread > 0) {
-                    data_len = (int) nread;
+                /* Check primary cache. */
+                if (ioctl->cache_count > 0 &&
+                    lba >= ioctl->cache_lba &&
+                    lba < ioctl->cache_lba + (uint32_t) ioctl->cache_count) {
+                    uint32_t idx = lba - ioctl->cache_lba;
+                    memcpy(&buffer[16],
+                           &ioctl->cache_buf[idx * COOKED_SECTOR_SIZE],
+                           COOKED_SECTOR_SIZE);
+                    data_len = COOKED_SECTOR_SIZE;
                     ret      = 1;
+                } else {
+                    /* Cache miss — try prefetch, then sync fill. */
+                    if (!ioctl_try_promote_prefetch(ioctl, lba)) {
+                        ssize_t nread = pread(ioctl->fd, ioctl->cache_buf,
+                                              (size_t) IOCTL_CACHE_SECTORS * COOKED_SECTOR_SIZE,
+                                              (off_t) lba * COOKED_SECTOR_SIZE);
+                        if (nread >= COOKED_SECTOR_SIZE) {
+                            ioctl->cache_lba   = lba;
+                            ioctl->cache_count = (int) (nread / COOKED_SECTOR_SIZE);
+                        } else {
+                            ioctl->cache_count = 0;
+                        }
+                    }
+
+                    if (ioctl->cache_count > 0 &&
+                        lba >= ioctl->cache_lba &&
+                        lba < ioctl->cache_lba + (uint32_t) ioctl->cache_count) {
+                        uint32_t idx = lba - ioctl->cache_lba;
+                        memcpy(&buffer[16],
+                               &ioctl->cache_buf[idx * COOKED_SECTOR_SIZE],
+                               COOKED_SECTOR_SIZE);
+                        data_len = COOKED_SECTOR_SIZE;
+                        ret      = 1;
+
+                        /* Kick off prefetch for the next block. */
+                        ioctl_trigger_prefetch(ioctl,
+                            ioctl->cache_lba + ioctl->cache_count);
+                    }
                 }
             }
         }
@@ -556,49 +732,120 @@ ioctl_read_sector(const void *local, uint8_t *buffer, uint32_t const sector)
         uint8_t sense[64];
         int     sense_len = 0;
 
-        memset(cdb, 0, sizeof(cdb));
-        cdb[0]  = 0xbe;                         /* READ CD */
-        cdb[1]  = 0x00;
-        cdb[2]  = (sector >> 24) & 0xff;
-        cdb[3]  = (sector >> 16) & 0xff;
-        cdb[4]  = (sector >> 8) & 0xff;
-        cdb[5]  = sector & 0xff;                 /* Starting LBA */
-        cdb[6]  = 0x00;
-        cdb[7]  = 0x00;
-        cdb[8]  = 0x01;                          /* Transfer Length = 1 */
-        /* If sector is FFFFFFFF, only return the subchannel. */
-        cdb[9]  = (sector == 0xffffffff) ? 0x00 : 0xf8;
-        cdb[10] = 0x02;
-        cdb[11] = 0x00;
+        if (sector != 0xffffffff &&
+            ioctl->cache_count > 0 &&
+            sector >= ioctl->cache_lba &&
+            sector < ioctl->cache_lba + (uint32_t) ioctl->cache_count) {
+            /* Read-ahead cache hit. */
+            uint32_t idx = sector - ioctl->cache_lba;
+            memcpy(buffer, &ioctl->cache_buf[idx * 2368], 2368);
+            ret      = 1;
+            data_len = 2368;
+        } else if (sector != 0xffffffff) {
+            /* Cache miss — try prefetch first, then sync bulk read. */
+            if (!ioctl_try_promote_prefetch(ioctl, sector)) {
+                memset(cdb, 0, sizeof(cdb));
+                cdb[0]  = 0xbe;                         /* READ CD */
+                cdb[2]  = (sector >> 24) & 0xff;
+                cdb[3]  = (sector >> 16) & 0xff;
+                cdb[4]  = (sector >> 8) & 0xff;
+                cdb[5]  = sector & 0xff;
+                cdb[8]  = IOCTL_CACHE_SECTORS;
+                cdb[9]  = 0xf8;
+                cdb[10] = 0x02;
 
-#ifdef ENABLE_IOCTL_LOG
-        ioctl_log(ioctl->log, "Host CDB: %02X %02X %02X %02X %02X %02X "
-                  "%02X %02X %02X %02X %02X %02X\n",
-                  cdb[0], cdb[1], cdb[2], cdb[3], cdb[4], cdb[5],
-                  cdb[6], cdb[7], cdb[8], cdb[9], cdb[10], cdb[11]);
-#endif
+                memset(sense, 0, sizeof(sense));
+                ret = sg_io_cmd(ioctl->fd, cdb, 12, ioctl->cache_buf,
+                                IOCTL_CACHE_BUF_SIZE, SG_DXFER_FROM_DEV,
+                                sense, &sense_len);
 
-        memset(sense, 0, sizeof(sense));
-        ret = sg_io_cmd(ioctl->fd, cdb, 12, buffer, len,
-                        SG_DXFER_FROM_DEV, sense, &sense_len);
+                if (ret && sense_len == 0) {
+                    ioctl->cache_lba   = sector;
+                    ioctl->cache_count = IOCTL_CACHE_SECTORS;
+                } else {
+                    /* Bulk failed — single-sector fallback. */
+                    ioctl->cache_count = 0;
+                    sense_len = 0;
 
-        ioctl_log(ioctl->log, "ioctl_read_sector: ret = %d, sense_len = %d\n",
-                  ret, sense_len);
+                    memset(cdb, 0, sizeof(cdb));
+                    cdb[0]  = 0xbe;
+                    cdb[2]  = (sector >> 24) & 0xff;
+                    cdb[3]  = (sector >> 16) & 0xff;
+                    cdb[4]  = (sector >> 8) & 0xff;
+                    cdb[5]  = sector & 0xff;
+                    cdb[8]  = 0x01;
+                    cdb[9]  = 0xf8;
+                    cdb[10] = 0x02;
 
-        if (sense_len >= 16) {
-            if ((sense[2] == 0x03) && (sense[12] == 0x11))
-                /* Treat this as an error to correctly indicate CIRC error to the guest. */
-                ret = 0;
-            ioctl_log(ioctl->log, "Host sense: %02X %02X %02X %02X %02X %02X %02X %02X\n",
-                      sense[0], sense[1], sense[2], sense[3],
-                      sense[4], sense[5], sense[6], sense[7]);
-            ioctl_log(ioctl->log, "            %02X %02X %02X %02X %02X %02X %02X %02X\n",
-                      sense[8], sense[9], sense[10], sense[11],
-                      sense[12], sense[13], sense[14], sense[15]);
+                    memset(sense, 0, sizeof(sense));
+                    ret = sg_io_cmd(ioctl->fd, cdb, 12, buffer, len,
+                                    SG_DXFER_FROM_DEV, sense, &sense_len);
+                }
+            }
+
+            if (ioctl->cache_count > 0 &&
+                sector >= ioctl->cache_lba &&
+                sector < ioctl->cache_lba + (uint32_t) ioctl->cache_count) {
+                /* Serve from cache (promoted or freshly filled). */
+                uint32_t idx = sector - ioctl->cache_lba;
+                memcpy(buffer, &ioctl->cache_buf[idx * 2368], 2368);
+                ret      = 1;
+                data_len = 2368;
+
+                /* Kick off prefetch for the next block. */
+                ioctl_trigger_prefetch(ioctl,
+                    ioctl->cache_lba + ioctl->cache_count);
+            } else {
+                /* Single-sector fallback path — sense handling. */
+                ioctl_log(ioctl->log, "ioctl_read_sector: ret = %d, sense_len = %d\n",
+                          ret, sense_len);
+
+                if (sense_len >= 16) {
+                    if ((sense[2] == 0x03) && (sense[12] == 0x11))
+                        ret = 0;
+                    ioctl_log(ioctl->log, "Host sense: %02X %02X %02X %02X %02X %02X %02X %02X\n",
+                              sense[0], sense[1], sense[2], sense[3],
+                              sense[4], sense[5], sense[6], sense[7]);
+                    ioctl_log(ioctl->log, "            %02X %02X %02X %02X %02X %02X %02X %02X\n",
+                              sense[8], sense[9], sense[10], sense[11],
+                              sense[12], sense[13], sense[14], sense[15]);
+                }
+
+                ret = ret ? 1 : -1;
+                data_len = len;
+            }
+        } else {
+            /* Subchannel-only read (sector == 0xffffffff). */
+            memset(cdb, 0, sizeof(cdb));
+            cdb[0]  = 0xbe;
+            cdb[2]  = (sector >> 24) & 0xff;
+            cdb[3]  = (sector >> 16) & 0xff;
+            cdb[4]  = (sector >> 8) & 0xff;
+            cdb[5]  = sector & 0xff;
+            cdb[8]  = 0x01;
+            cdb[10] = 0x02;
+
+            memset(sense, 0, sizeof(sense));
+            ret = sg_io_cmd(ioctl->fd, cdb, 12, buffer, len,
+                            SG_DXFER_FROM_DEV, sense, &sense_len);
+
+            ioctl_log(ioctl->log, "ioctl_read_sector: ret = %d, sense_len = %d\n",
+                      ret, sense_len);
+
+            if (sense_len >= 16) {
+                if ((sense[2] == 0x03) && (sense[12] == 0x11))
+                    ret = 0;
+                ioctl_log(ioctl->log, "Host sense: %02X %02X %02X %02X %02X %02X %02X %02X\n",
+                          sense[0], sense[1], sense[2], sense[3],
+                          sense[4], sense[5], sense[6], sense[7]);
+                ioctl_log(ioctl->log, "            %02X %02X %02X %02X %02X %02X %02X %02X\n",
+                          sense[8], sense[9], sense[10], sense[11],
+                          sense[12], sense[13], sense[14], sense[15]);
+            }
+
+            ret = ret ? 1 : -1;
+            data_len = len;
         }
-
-        ret = ret ? 1 : -1;
-        data_len = len; /* sg_io_cmd handles this internally */
     }
 
     ioctl_log(ioctl->log, "ioctl_read_sector: final ret = %i\n", ret);
@@ -796,6 +1043,16 @@ ioctl_close(void *local)
 {
     ioctl_t *ioctl = (ioctl_t *) local;
 
+    /* Stop the prefetch thread. */
+    pthread_mutex_lock(&ioctl->prefetch_mutex);
+    ioctl->prefetch_shutdown = 1;
+    pthread_cond_signal(&ioctl->prefetch_start);
+    pthread_mutex_unlock(&ioctl->prefetch_mutex);
+    pthread_join(ioctl->prefetch_tid, NULL);
+    pthread_mutex_destroy(&ioctl->prefetch_mutex);
+    pthread_cond_destroy(&ioctl->prefetch_start);
+    pthread_cond_destroy(&ioctl->prefetch_done);
+
     /* Stop the polling thread. */
     if (ioctl->poll_active) {
         ioctl->poll_active = 0;
@@ -859,6 +1116,16 @@ ioctl_open(cdrom_t *dev, const char *drv)
         /* drv is "ioctl:///dev/sr0", extract the path part. */
         snprintf(ioctl->path, sizeof(ioctl->path), "%s", &(drv[8]));
         ioctl_log(ioctl->log, "Path is %s\n", ioctl->path);
+
+        /* Initialize double-buffered cache pointers. */
+        ioctl->cache_buf    = ioctl->cache_data[0];
+        ioctl->prefetch_buf = ioctl->cache_data[1];
+
+        /* Initialize prefetch synchronization. */
+        pthread_mutex_init(&ioctl->prefetch_mutex, NULL);
+        pthread_cond_init(&ioctl->prefetch_start, NULL);
+        pthread_cond_init(&ioctl->prefetch_done, NULL);
+        pthread_create(&ioctl->prefetch_tid, NULL, ioctl_prefetch_thread, ioctl);
 
         ioctl->dev = dev;
         dev->ops   = &ioctl_ops;
