@@ -1161,11 +1161,13 @@ else
 	# Patches to build with the old PipeWire version in Debian.
 	sed -i -e 's/>=0.3.23//' "$prefix/CMakeLists.txt"
 	sed -i -e 's/PW_KEY_CONFIG_NAME/"config.name"/g' "$prefix/alc/backends/pipewire.cpp"
+	sed -i -e 's/CXX_STANDARD 14/CXX_STANDARD 17/g' "$prefix/CMakeLists.txt"
 
 	# Disable the sndio backend so the resulting libopenal does not depend on
 	# libsndio, which is a BSD audio system with no use inside a Linux AppImage
 	# (OpenAL still outputs through ALSA/PulseAudio/PipeWire).
 	prefix_build="$prefix/build-$arch_deb"
+	rm -rf "$prefix_build"
 	cmake -G Ninja -D ALSOFT_BACKEND_SNDIO=OFF -D CMAKE_CXX_STANDARD=17 -D "CMAKE_TOOLCHAIN_FILE=$toolchain_file_libs" -D "CMAKE_INSTALL_PREFIX=$cwd_root/archive_tmp/usr" -S "$prefix" -B "$prefix_build" || exit 99
 	cmake --build "$prefix_build" -j$(nproc) || exit 99
 	cmake --install "$prefix_build" || exit 99
