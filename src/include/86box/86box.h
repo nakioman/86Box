@@ -260,6 +260,7 @@ extern int  start_vmm;             /* the current execution will start the manag
 extern int  portable_mode;         /* we are running in portable mode 
                                       (global dirs = exe path) */
 extern int global_cfg_overridden;  /* global config file was overriden on command line */
+extern int  gdbstub_port;           /* GDB stub server port */
 
 extern int  monitor_edid;                   /* (C) Which EDID to use. 0=default, 1=custom. */
 extern char monitor_edid_path[1024];        /* (C) Path to custom EDID */

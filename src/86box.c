@@ -225,6 +225,7 @@ int      is_pcjr = 0;                                             /* The current
 int      portable_mode = 0;                                       /* We are running in portable mode
                                                                      (global dirs = exe path) */
 int      global_cfg_overridden = 0;                               /* Global config file was overriden on command line */
+int      gdbstub_port = 12345;
 
 int      monitor_edid = 0;                                        /* (C) Which EDID to use. 0=default, 1=custom. */
 char     monitor_edid_path[1024] = { 0 };                         /* (C) Path to custom EDID */
