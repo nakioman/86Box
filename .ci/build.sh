@@ -1125,7 +1125,7 @@ then
 else
 	cwd_root="$(pwd)"
 
-	# Build SDL2 with video systems (and dependencies) only if the SDL interface is used.
+	# Build SDL3 with video systems (and dependencies) only if the SDL interface is used.
 	sdl_ui=OFF
 	grep -qiE "^QT:BOOL=ON" build/CMakeCache.txt || sdl_ui=ON
 
@@ -1170,7 +1170,6 @@ else
 		wget -qO - https://www.libsdl.org/release/SDL3-3.4.14.tar.gz | tar zxf - -C "$cache_dir" || rm -rf "$prefix"
 	fi
 	prefix_build="$cache_dir/SDL3-3.4.14-build-$arch_deb"
-	sdl_ui=OFF
 	cmake -G Ninja -D SDL_SHARED=ON -D SDL_STATIC=OFF \
 		\
 		-D SDL_AUDIO=OFF -D SDL_DUMMYAUDIO=OFF -D SDL_DISKAUDIO=OFF -D SDL_OSS=OFF -D SDL_ALSA=OFF -D SDL_ALSA_SHARED=OFF \
