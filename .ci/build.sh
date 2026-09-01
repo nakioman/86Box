@@ -53,6 +53,9 @@
 alias is_windows='[ -n "$MSYSTEM" ]'
 alias is_mac='uname -s | grep -q Darwin'
 
+# Keep legacy third-party CMake projects buildable with CMake 4.x.
+export CMAKE_POLICY_VERSION_MINIMUM=3.5
+
 make_tar() {
 	# Install dependencies.
 	if ! which tar xz > /dev/null 2>&1
