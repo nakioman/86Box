@@ -53,9 +53,6 @@
 alias is_windows='[ -n "$MSYSTEM" ]'
 alias is_mac='uname -s | grep -q Darwin'
 
-# Keep legacy third-party CMake projects buildable with CMake 4.x.
-export CMAKE_POLICY_VERSION_MINIMUM=3.5
-
 make_tar() {
 	# Install dependencies.
 	if ! which tar xz > /dev/null 2>&1
@@ -711,9 +708,9 @@ else
 		x86_64)	arch_deb="amd64";;
 		*)	arch_deb="$arch";;
 	esac
-        grep -q " resolute " /etc/apt/sources.list || echo [!] WARNING: System not running the expected Ubuntu version
+        grep -q " bullseye " /etc/apt/sources.list || echo [!] WARNING: System not running the expected Debian version
 
-	# Giant hack because the distribution may ship with old Vulkan headers.
+	# Giant hack because Debian Bullseye ships with ancient headers.
 	cd src/include
 	git clone --depth 1 https://github.com/KhronosGroup/vulkan-headers.git || exit 99
 	ln -sf vulkan-headers/include/vulkan vulkan
@@ -721,7 +718,7 @@ else
 	cd ../../
 
 	# Establish general dependencies.
-	pkgs="cmake ninja-build pkg-config git wget p7zip-full extra-cmake-modules wayland-protocols tar gzip file appstream qttranslations5-l10n python3-pip python3-venv squashfs-tools curl"
+	pkgs="cmake ninja-build meson pkg-config git wget p7zip-full extra-cmake-modules wayland-protocols tar gzip file appstream qttranslations5-l10n python3-pip python3-venv squashfs-tools curl"
 	if [ "$(dpkg --print-architecture)" = "$arch_deb" ]
 	then
 		pkgs="$pkgs build-essential"
@@ -744,12 +741,26 @@ else
 	# ...and the ones we do want listed. Non-dev packages fill missing spots on the list.
 	libpkgs=""
 	longest_libpkg=0
-	for pkg in libc6-dev libstdc++6 libopenal-dev libfreetype6-dev libx11-dev libsdl2-dev libpng-dev librtmidi-dev qtdeclarative5-dev libwayland-dev libevdev-dev libxkbcommon-x11-dev libglib2.0-dev libslirp-dev libaudio-dev libjack-jackd2-dev libpipewire-0.3-dev libsamplerate0-dev libvdeplug-dev libfluidsynth-dev libsndfile1-dev libserialport-dev libvncserver-dev libzstd-dev libgpiod-dev
+	for pkg in libc6-dev libstdc++6 libopenal-dev libfreetype6-dev libx11-dev libsdl2-dev libpng-dev librtmidi-dev qtdeclarative5-dev libwayland-dev libevdev-dev libxkbcommon-x11-dev libglib2.0-dev libslirp-dev libaudio-dev libjack-jackd2-dev libpipewire-0.3-dev libsamplerate0-dev libvdeplug-dev libfluidsynth-dev libsndfile1-dev libserialport-dev libvncserver-dev libzstd-dev
 	do
 		libpkgs="$libpkgs $pkg:$arch_deb"
 		length=$(echo -n $pkg | sed 's/-dev$//' | sed "s/qtdeclarative/qt/" | wc -c)
 		[ $length -gt $longest_libpkg ] && longest_libpkg=$length
 	done
+
+	# Build libgpiod v2 locally. Bullseye only provides libgpiod v1.
+	gpiod_root="$cache_dir/libgpiod-2.2.1"
+	gpiod_install="$gpiod_root/install"
+	if [ ! -e "$gpiod_install/lib/libgpiod.so.3" ]
+	then
+		rm -rf "$gpiod_root"
+		mkdir -p "$gpiod_root"
+		wget -qO - https://git.kernel.org/pub/scm/libs/libgpiod/libgpiod.git/snapshot/libgpiod-2.2.1.tar.gz | tar zxf - -C "$gpiod_root" --strip-components=1 || exit 99
+		meson setup "$gpiod_root/build" "$gpiod_root" --prefix="$gpiod_install" -Dtests=false || exit 99
+		meson compile -C "$gpiod_root/build" || exit 99
+		meson install -C "$gpiod_root/build" || exit 99
+	fi
+	export PKG_CONFIG_PATH="$gpiod_install/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
 	# Determine toolchain architecture triplet.
 	case $arch in
@@ -933,6 +944,8 @@ esac
 echo [-] Gathering archive files
 rm -rf archive_tmp
 mkdir archive_tmp
+mkdir -p archive_tmp/usr/lib
+cp -P "$gpiod_install/lib/"libgpiod.so.3* archive_tmp/usr/lib/ || exit 99
 if [ ! -d "archive_tmp" ]
 then
 	echo [!] Archive directory creation failed
@@ -1023,7 +1036,7 @@ fi
 cwd_root="$(pwd)"
 cd $prefix/src
 echo Now in $prefix/src
-cmake -B build -S .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release -DBUILD_TOOL=1 -DAARU_BUILD_PACKAGE=ON || exit 99
+cmake -B build -S .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TOOL=1 -DAARU_BUILD_PACKAGE=ON || exit 99
 cmake --build build -j$(nproc) || exit 99
 status=0
 if is_windows
@@ -1161,14 +1174,12 @@ else
 	# Patches to build with the old PipeWire version in Debian.
 	sed -i -e 's/>=0.3.23//' "$prefix/CMakeLists.txt"
 	sed -i -e 's/PW_KEY_CONFIG_NAME/"config.name"/g' "$prefix/alc/backends/pipewire.cpp"
-	sed -i -e 's/CXX_STANDARD 14/CXX_STANDARD 17/g' "$prefix/CMakeLists.txt"
 
 	# Disable the sndio backend so the resulting libopenal does not depend on
 	# libsndio, which is a BSD audio system with no use inside a Linux AppImage
 	# (OpenAL still outputs through ALSA/PulseAudio/PipeWire).
 	prefix_build="$prefix/build-$arch_deb"
-	rm -rf "$prefix_build"
-	cmake -G Ninja -D ALSOFT_BACKEND_SNDIO=OFF -D CMAKE_CXX_STANDARD=17 -D "CMAKE_TOOLCHAIN_FILE=$toolchain_file_libs" -D "CMAKE_INSTALL_PREFIX=$cwd_root/archive_tmp/usr" -S "$prefix" -B "$prefix_build" || exit 99
+	cmake -G Ninja -D ALSOFT_BACKEND_SNDIO=OFF -D "CMAKE_TOOLCHAIN_FILE=$toolchain_file_libs" -D "CMAKE_INSTALL_PREFIX=$cwd_root/archive_tmp/usr" -S "$prefix" -B "$prefix_build" || exit 99
 	cmake --build "$prefix_build" -j$(nproc) || exit 99
 	cmake --install "$prefix_build" || exit 99
 
