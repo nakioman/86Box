@@ -1373,6 +1373,18 @@ EOF
 	mkdir -p "$cache_dir/appimage-builder-cache"
 	ln -s "$cache_dir/appimage-builder-cache" appimage-builder-cache
 
+	# appimage-builder checks for apt-key, which was removed from recent Debian
+	# and Ubuntu releases. It only requires the command for its dependency check;
+	# package signatures are handled by the downloaded keyring files.
+	if ! command -v apt-key > /dev/null 2>&1
+	then
+		appimage_builder_bin="$cache_dir/appimage-builder-bin"
+		mkdir -p "$appimage_builder_bin"
+		printf '#!/bin/sh\\nexit 0\\n' > "$appimage_builder_bin/apt-key"
+		chmod +x "$appimage_builder_bin/apt-key"
+		export PATH="$appimage_builder_bin:$PATH"
+	fi
+
 	# Run appimage-builder from the virtual environment created above.
 	# --appdir is a workaround for appimage-builder issue 270 reported by us.
 	for retry in 1 2 3 4 5
