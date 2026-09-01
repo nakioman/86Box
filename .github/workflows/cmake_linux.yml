@@ -94,7 +94,7 @@ jobs:
       - name: Bootstrap container
         run: |
           apt-get update
-          apt-get install -y cargo git rustc rustup sudo
+          apt-get install -y git rustup sudo
           rustup default stable
           echo /root/.cargo/bin >> "$GITHUB_PATH"
 
