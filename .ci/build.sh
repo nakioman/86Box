@@ -797,6 +797,10 @@ EOF
 		echo [-] Not installing dependencies again
 	fi
 
+	# GPIO is optional for the regular build, so ensure its pkg-config metadata
+	# is installed even when the general dependency cache is already populated.
+	DEBIAN_FRONTEND=noninteractive sudo apt-get -y install "libgpiod-dev:$arch_deb"
+
 	# if dpkg -s rustc-web
 	# then
 		# sudo apt-get purge -y rustc-web cargo-web
