@@ -822,14 +822,20 @@ EOF
 	# Build libgpiod v2 locally. Bullseye only provides libgpiod v1.
 	gpiod_root="$cache_dir/libgpiod-2.3"
 	gpiod_install="$gpiod_root/install"
+	gpiod_meson_venv="$cache_dir/libgpiod-meson-venv"
+	if [ ! -x "$gpiod_meson_venv/bin/meson" ]
+	then
+		python3 -m venv "$gpiod_meson_venv" || exit 99
+		"$gpiod_meson_venv/bin/pip" install --upgrade 'meson>=0.64.0' || exit 99
+	fi
 	if [ ! -e "$gpiod_install/lib/libgpiod.so.3" ]
 	then
 		rm -rf "$gpiod_root"
 		wget -q https://mirrors.edge.kernel.org/pub/software/libs/libgpiod/libgpiod-2.3.tar.xz -O "$cache_dir/libgpiod-2.3.tar.xz" || exit 99
 		tar -xJf "$cache_dir/libgpiod-2.3.tar.xz" -C "$cache_dir" || exit 99
-		meson setup "$gpiod_root/build" "$gpiod_root" --prefix="$gpiod_install" -Dtests=false || exit 99
-		meson compile -C "$gpiod_root/build" || exit 99
-		meson install -C "$gpiod_root/build" || exit 99
+		"$gpiod_meson_venv/bin/meson" setup "$gpiod_root/build" "$gpiod_root" --prefix="$gpiod_install" -Dtests=false || exit 99
+		"$gpiod_meson_venv/bin/meson" compile -C "$gpiod_root/build" || exit 99
+		"$gpiod_meson_venv/bin/meson" install -C "$gpiod_root/build" || exit 99
 	fi
 	export PKG_CONFIG_PATH="$gpiod_install/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 	sed -i "s|set(ENV{PKG_CONFIG_PATH} \"\")|set(ENV{PKG_CONFIG_PATH} \"$gpiod_install/lib/pkgconfig\")|" "$toolchain_file"
