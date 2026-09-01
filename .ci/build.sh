@@ -839,6 +839,7 @@ EOF
 	fi
 	export PKG_CONFIG_PATH="$gpiod_install/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 	sed -i "s|set(ENV{PKG_CONFIG_PATH} \"\")|set(ENV{PKG_CONFIG_PATH} \"$gpiod_install/lib/pkgconfig\")|" "$toolchain_file"
+	sed -i "s|set(ENV{PKG_CONFIG_LIBDIR} \"|set(ENV{PKG_CONFIG_LIBDIR} \"$gpiod_install/lib/pkgconfig:|" "$toolchain_file"
 
 	if dpkg -s rustc-web
 	then
