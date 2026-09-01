@@ -825,8 +825,8 @@ EOF
 	if [ ! -e "$gpiod_install/lib/libgpiod.so.3" ]
 	then
 		rm -rf "$gpiod_root"
-		mkdir -p "$gpiod_root"
-		wget -qO - https://github.com/brgl/libgpiod/archive/refs/tags/v2.2.1.tar.gz | tar zxf - -C "$gpiod_root" --strip-components=1 || exit 99
+		wget -q https://mirrors.edge.kernel.org/pub/software/libs/libgpiod/libgpiod-2.2.1.tar.xz -O "$cache_dir/libgpiod-2.2.1.tar.xz" || exit 99
+		tar -xJf "$cache_dir/libgpiod-2.2.1.tar.xz" -C "$cache_dir" || exit 99
 		meson setup "$gpiod_root/build" "$gpiod_root" --prefix="$gpiod_install" -Dtests=false || exit 99
 		meson compile -C "$gpiod_root/build" || exit 99
 		meson install -C "$gpiod_root/build" || exit 99
