@@ -833,7 +833,7 @@ EOF
 		rm -rf "$gpiod_root"
 		wget -q https://mirrors.edge.kernel.org/pub/software/libs/libgpiod/libgpiod-2.3.tar.xz -O "$cache_dir/libgpiod-2.3.tar.xz" || exit 99
 		tar -xJf "$cache_dir/libgpiod-2.3.tar.xz" -C "$cache_dir" || exit 99
-		"$gpiod_meson_venv/bin/meson" setup "$gpiod_root/build" "$gpiod_root" --prefix="$gpiod_install" -Dtests=false || exit 99
+		"$gpiod_meson_venv/bin/meson" setup "$gpiod_root/build" "$gpiod_root" --prefix="$gpiod_install" -Dtests=disabled || exit 99
 		"$gpiod_meson_venv/bin/meson" compile -C "$gpiod_root/build" || exit 99
 		"$gpiod_meson_venv/bin/meson" install -C "$gpiod_root/build" || exit 99
 	fi
