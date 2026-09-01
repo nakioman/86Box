@@ -94,7 +94,9 @@ jobs:
       - name: Bootstrap container
         run: |
           apt-get update
-          apt-get install -y cargo git rustc sudo
+          apt-get install -y cargo git rustc rustup sudo
+          rustup default stable
+          echo /root/.cargo/bin >> "$GITHUB_PATH"
 
       - name: Checkout repository
         uses: actions/checkout@v4
