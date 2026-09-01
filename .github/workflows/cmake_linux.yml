@@ -22,7 +22,7 @@ jobs:
   pull-request:
     if: github.event_name == 'pull_request'
     name: "PR ${{ matrix.build.name }}"
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: true
       matrix:
@@ -45,7 +45,7 @@ jobs:
           ninja-build
           libfreetype-dev
           libgles2-mesa-dev
-          libsdl2-dev
+          libsdl3-dev
           libpng-dev
           libsndfile1-dev
           libc6-dev
