@@ -47,6 +47,7 @@ jobs:
           libgles2-mesa-dev
           libsdl2-dev
           libpng-dev
+          libsndfile1-dev
           libc6-dev
           librtmidi-dev
           libopenal-dev
