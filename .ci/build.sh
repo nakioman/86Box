@@ -708,9 +708,9 @@ else
 		x86_64)	arch_deb="amd64";;
 		*)	arch_deb="$arch";;
 	esac
-        grep -q " bookworm " /etc/apt/sources.list || echo [!] WARNING: System not running the expected Debian version
+        grep -q " resolute " /etc/apt/sources.list || echo [!] WARNING: System not running the expected Ubuntu version
 
-	# Giant hack because Debian Bullseye ships with ancient headers.
+	# Giant hack because the distribution may ship with old Vulkan headers.
 	cd src/include
 	git clone --depth 1 https://github.com/KhronosGroup/vulkan-headers.git || exit 99
 	ln -sf vulkan-headers/include/vulkan vulkan
