@@ -241,6 +241,7 @@ int      gdbstub_port = 12345;                                    /* (C) The GDB
 int      gpio_enabled = 0;
 char     gpio_device[256] = "/dev/gpiochip0";
 int      gpio_hdd_pin = -1;                                      /* -1 = disabled */
+int      gpio_active_low = 0;                                    /* 0 = active high */
 #endif
 
 #ifdef USE_FLOPPY_CONTROL_SOCKET
