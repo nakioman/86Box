@@ -832,6 +832,9 @@ if [ "$CI" = "true" ]
 then
 	# Backup strategy when running under Jenkins.
 	[ -z "$git_hash" ] && git_hash=$(echo $GIT_COMMIT | cut -c 1-8)
+
+	# ...and under GitHub Actions, where git may refuse to read the checkout.
+	[ -z "$git_hash" ] && git_hash=$(echo $GITHUB_SHA | cut -c 1-8)
 elif [ -n "$git_hash" ]
 then
 	# Append + to denote a dirty tree.
@@ -922,24 +925,32 @@ if [ "$CI" = "true" ]
 then
 	# Backup strategy when running under Jenkins.
 	[ -z "$git_repo" ] && git_repo=$GIT_URL
+
+	# ...and under GitHub Actions, where git may refuse to read the checkout.
+	[ -z "$git_repo" -a -n "$GITHUB_REPOSITORY" ] && git_repo="${GITHUB_SERVER_URL:-https://github.com}/$GITHUB_REPOSITORY"
 fi
+assets_repo="$ASSETS_REPOSITORY"
+[ -z "$assets_repo" -a -n "$git_repo" ] && assets_repo="$(dirname "$git_repo")/assets.git"
 if grep -qiE "^BUILD_TYPE:[^=]+=release" build/CMakeCache.txt 2> /dev/null
 then
-	if [ -n "$git_repo" ]
+	# A release build without assets is not shippable, so bail out instead of
+	# silently producing a package which is missing them.
+	if [ -z "$assets_repo" ]
 	then
-		assets_repo=${ASSETS_REPOSITORY:-"$(dirname "$git_repo")/assets.git"}
-		echo [-] Downloading assets
-		cd archive_tmp
-		if ! git clone --depth 1 "$assets_repo" assets
-		then
-			echo [!] Assets download failed
-			exit 7
-		fi
-		# Remove dot directories (including .git) and top level files.
-		rm -rf assets/.* 2> /dev/null
-		rm -f assets/* 2> /dev/null
-		cd ..
+		echo [!] Could not determine the assets repository
+		exit 7
 	fi
+	echo [-] Downloading assets
+	cd archive_tmp
+	if ! git clone --depth 1 "$assets_repo" assets
+	then
+		echo [!] Assets download failed
+		exit 7
+	fi
+	# Remove dot directories (including .git) and top level files.
+	rm -rf assets/.* 2> /dev/null
+	rm -f assets/* 2> /dev/null
+	cd ..
 fi
 
 # Build mdsx library.

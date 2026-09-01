@@ -22,7 +22,7 @@ jobs:
   pull-request:
     if: github.event_name == 'pull_request'
     name: "PR ${{ matrix.build.name }}"
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: true
       matrix:
@@ -45,8 +45,9 @@ jobs:
           ninja-build
           libfreetype-dev
           libgles2-mesa-dev
-          libsdl2-dev
+          libsdl3-dev
           libpng-dev
+          libsndfile1-dev
           libc6-dev
           librtmidi-dev
           libopenal-dev
@@ -77,20 +78,38 @@ jobs:
     if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
     name: "AppImage ${{ matrix.arch }}"
     runs-on: ${{ matrix.runner }}
+    container:
+      image: debian:trixie
+      options: --user root
     strategy:
       fail-fast: true
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-22.04
+            runner: ubuntu-26.04
           - arch: arm64
-            runner: ubuntu-22.04-arm
+            runner: ubuntu-26.04-arm
 
     steps:
+      - name: Bootstrap container
+        run: |
+          apt-get update
+          apt-get install -y git rustup sudo
+          rustup default stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # actions/checkout marks the workspace as safe only in a throwaway git
+      # config, so git is unusable in later steps inside the container: the
+      # checkout belongs to the runner user while we run as root. build.sh
+      # needs git to read the origin URL (to locate the assets repository)
+      # and the commit hash, so make the workspace safe for real.
+      - name: Trust the workspace git repository
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Build AppImage
         env:
@@ -119,7 +138,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     name: Publish GitHub release
     needs: release-build
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
 
