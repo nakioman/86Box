@@ -837,9 +837,12 @@ EOF
 		"$gpiod_meson_venv/bin/meson" compile -C "$gpiod_root/build" || exit 99
 		"$gpiod_meson_venv/bin/meson" install -C "$gpiod_root/build" || exit 99
 	fi
-	export PKG_CONFIG_PATH="$gpiod_install/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-	sed -i "s|set(ENV{PKG_CONFIG_PATH} \"\")|set(ENV{PKG_CONFIG_PATH} \"$gpiod_install/lib/pkgconfig\")|" "$toolchain_file"
-	sed -i "s|set(ENV{PKG_CONFIG_LIBDIR} \"|set(ENV{PKG_CONFIG_LIBDIR} \"$gpiod_install/lib/pkgconfig:|" "$toolchain_file"
+	gpiod_pkgconfig_file=$(find "$gpiod_install" -name libgpiod.pc -print -quit)
+	[ -n "$gpiod_pkgconfig_file" ] || exit 99
+	gpiod_pkgconfig_dir=$(dirname "$gpiod_pkgconfig_file")
+	export PKG_CONFIG_PATH="$gpiod_pkgconfig_dir:${PKG_CONFIG_PATH:-}"
+	sed -i "s|set(ENV{PKG_CONFIG_PATH} \"\")|set(ENV{PKG_CONFIG_PATH} \"$gpiod_pkgconfig_dir\")|" "$toolchain_file"
+	sed -i "s|set(ENV{PKG_CONFIG_LIBDIR} \"|set(ENV{PKG_CONFIG_LIBDIR} \"$gpiod_pkgconfig_dir:|" "$toolchain_file"
 
 	if dpkg -s rustc-web
 	then
