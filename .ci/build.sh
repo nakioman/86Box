@@ -748,20 +748,6 @@ else
 		[ $length -gt $longest_libpkg ] && longest_libpkg=$length
 	done
 
-	# Build libgpiod v2 locally. Bullseye only provides libgpiod v1.
-	gpiod_root="$cache_dir/libgpiod-2.2.1"
-	gpiod_install="$gpiod_root/install"
-	if [ ! -e "$gpiod_install/lib/libgpiod.so.3" ]
-	then
-		rm -rf "$gpiod_root"
-		mkdir -p "$gpiod_root"
-		wget -qO - https://git.kernel.org/pub/scm/libs/libgpiod/libgpiod.git/snapshot/libgpiod-2.2.1.tar.gz | tar zxf - -C "$gpiod_root" --strip-components=1 || exit 99
-		meson setup "$gpiod_root/build" "$gpiod_root" --prefix="$gpiod_install" -Dtests=false || exit 99
-		meson compile -C "$gpiod_root/build" || exit 99
-		meson install -C "$gpiod_root/build" || exit 99
-	fi
-	export PKG_CONFIG_PATH="$gpiod_install/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-
 	# Determine toolchain architecture triplet.
 	case $arch in
 		arm64)	arch_triplet="aarch64-linux-gnu";;
@@ -832,6 +818,21 @@ EOF
 	else
 		echo [-] Not installing dependencies again
 	fi
+
+	# Build libgpiod v2 locally. Bullseye only provides libgpiod v1.
+	gpiod_root="$cache_dir/libgpiod-2.2.1"
+	gpiod_install="$gpiod_root/install"
+	if [ ! -e "$gpiod_install/lib/libgpiod.so.3" ]
+	then
+		rm -rf "$gpiod_root"
+		mkdir -p "$gpiod_root"
+		wget -qO - https://git.kernel.org/pub/scm/libs/libgpiod/libgpiod.git/snapshot/libgpiod-2.2.1.tar.gz | tar zxf - -C "$gpiod_root" --strip-components=1 || exit 99
+		meson setup "$gpiod_root/build" "$gpiod_root" --prefix="$gpiod_install" -Dtests=false || exit 99
+		meson compile -C "$gpiod_root/build" || exit 99
+		meson install -C "$gpiod_root/build" || exit 99
+	fi
+	export PKG_CONFIG_PATH="$gpiod_install/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+	sed -i "s|set(ENV{PKG_CONFIG_PATH} \"\")|set(ENV{PKG_CONFIG_PATH} \"$gpiod_install/lib/pkgconfig\")|" "$toolchain_file"
 
 	if dpkg -s rustc-web
 	then
