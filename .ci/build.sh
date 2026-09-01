@@ -1020,7 +1020,7 @@ fi
 cwd_root="$(pwd)"
 cd $prefix/src
 echo Now in $prefix/src
-cmake -B build -S .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TOOL=1 -DAARU_BUILD_PACKAGE=ON || exit 99
+cmake -B build -S .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release -DBUILD_TOOL=1 -DAARU_BUILD_PACKAGE=ON || exit 99
 cmake --build build -j$(nproc) || exit 99
 status=0
 if is_windows
