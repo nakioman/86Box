@@ -78,6 +78,9 @@ jobs:
     if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
     name: "AppImage ${{ matrix.arch }}"
     runs-on: ${{ matrix.runner }}
+    container:
+      image: debian:trixie
+      options: --user root
     strategy:
       fail-fast: true
       matrix:
@@ -88,6 +91,11 @@ jobs:
             runner: ubuntu-26.04-arm
 
     steps:
+      - name: Bootstrap container
+        run: |
+          apt-get update
+          apt-get install -y git sudo
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
