@@ -826,7 +826,7 @@ EOF
 	then
 		rm -rf "$gpiod_root"
 		mkdir -p "$gpiod_root"
-		wget -qO - https://git.kernel.org/pub/scm/libs/libgpiod/libgpiod.git/snapshot/libgpiod-2.2.1.tar.gz | tar zxf - -C "$gpiod_root" --strip-components=1 || exit 99
+		wget -qO - https://github.com/brgl/libgpiod/archive/refs/tags/v2.2.1.tar.gz | tar zxf - -C "$gpiod_root" --strip-components=1 || exit 99
 		meson setup "$gpiod_root/build" "$gpiod_root" --prefix="$gpiod_install" -Dtests=false || exit 99
 		meson compile -C "$gpiod_root/build" || exit 99
 		meson install -C "$gpiod_root/build" || exit 99
