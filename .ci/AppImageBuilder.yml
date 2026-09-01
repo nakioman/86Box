@@ -89,7 +89,6 @@ AppDir:
     - usr/lib/cmake # produced by library compilation
     - usr/lib/pkgconfig # produced by library compilation
     - usr/s[!h]* # s* except share
-    - usr/share/[!aim]* # * except applications, icons, metainfo
     - usr/share/a[!p]* # a* except applications
     - usr/share/ap[!p]* # ap* except applications
     - usr/share/app[!l]* # app* except applications
