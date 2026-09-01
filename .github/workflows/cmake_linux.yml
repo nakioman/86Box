@@ -83,9 +83,9 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-22.04
+            runner: ubuntu-26.04
           - arch: arm64
-            runner: ubuntu-22.04-arm
+            runner: ubuntu-26.04-arm
 
     steps:
       - name: Checkout repository
