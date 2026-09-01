@@ -923,7 +923,7 @@ then
 	# Backup strategy when running under Jenkins.
 	[ -z "$git_repo" ] && git_repo=$GIT_URL
 fi
-if grep -qiE "^BUILD_TYPE:[^=]+=release" build/CMakeCache.txt 2> /dev/null
+if grep -qiE "^(BUILD_TYPE|CMAKE_BUILD_TYPE):[^=]+=release" build/CMakeCache.txt 2> /dev/null
 then
 	if [ -n "$git_repo" ]
 	then
