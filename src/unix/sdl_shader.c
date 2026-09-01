@@ -331,28 +331,9 @@ apply_config_overrides(GLuint program, const char *shader_name, const char *sour
     }
 }
 
-int
-sdl_shader_init(SDL_Window *win, const char *shader_path)
+static void
+sdl_shader_setup_display_mode(SDL_Window *win)
 {
-    char *glsl_path = NULL;
-    const char *ext = strrchr(shader_path, '.');
-    if (ext && strcmp(ext, ".glslp") == 0)
-        glsl_path = resolve_glslp(shader_path);
-    else
-        glsl_path = strdup(shader_path);
-
-    if (!glsl_path) {
-        fprintf(stderr, "SDL Shader: cannot resolve path from '%s'\n", shader_path);
-        return 0;
-    }
-
-    char *source = read_text_file(glsl_path);
-    if (!source) {
-        fprintf(stderr, "SDL Shader: cannot load '%s'\n", glsl_path);
-        free(glsl_path);
-        return 0;
-    }
-    free(glsl_path);
 #ifdef USE_SDL2_LIB
     SDL_DisplayMode dm;
     int disp_idx = SDL_GetWindowDisplayIndex(win);
@@ -394,6 +375,31 @@ sdl_shader_init(SDL_Window *win, const char *shader_path)
             SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN);
     }
 #endif
+}
+
+int
+sdl_shader_init(SDL_Window *win, const char *shader_path)
+{
+    char *glsl_path = NULL;
+    const char *ext = strrchr(shader_path, '.');
+    if (ext && strcmp(ext, ".glslp") == 0)
+        glsl_path = resolve_glslp(shader_path);
+    else
+        glsl_path = strdup(shader_path);
+
+    if (!glsl_path) {
+        fprintf(stderr, "SDL Shader: cannot resolve path from '%s'\n", shader_path);
+        return 0;
+    }
+
+    char *source = read_text_file(glsl_path);
+    if (!source) {
+        fprintf(stderr, "SDL Shader: cannot load '%s'\n", glsl_path);
+        free(glsl_path);
+        return 0;
+    }
+    free(glsl_path);
+    sdl_shader_setup_display_mode(win);
 
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
@@ -634,6 +640,12 @@ static const char *pt_frag_src =
 int
 sdl_shader_init_passthrough(SDL_Window *win)
 {
+    /* The shader path establishes the fullscreen display mode here; the
+       passthrough path must do the same, or a KMSDRM window ends up fullscreen
+       with no mode ever set and never shows the emulated framebuffer (while the
+       GL context still exists, so the OSD keeps compositing on top). */
+    sdl_shader_setup_display_mode(win);
+
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
