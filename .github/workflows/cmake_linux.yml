@@ -85,8 +85,6 @@ jobs:
         include:
           - arch: x86_64
             runner: ubuntu-26.04
-          - arch: arm64
-            runner: ubuntu-26.04-arm
 
     steps:
       - name: Checkout repository
