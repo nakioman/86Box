@@ -938,9 +938,6 @@ then
 		# Remove dot directories (including .git) and top level files.
 		rm -rf assets/.* 2> /dev/null
 		rm -f assets/* 2> /dev/null
-		# Install assets where the Linux frontend searches for packaged data.
-		mkdir -p usr/share/86Box
-		mv assets usr/share/86Box/assets
 		cd ..
 	fi
 fi
