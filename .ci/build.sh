@@ -820,13 +820,13 @@ EOF
 	fi
 
 	# Build libgpiod v2 locally. Bullseye only provides libgpiod v1.
-	gpiod_root="$cache_dir/libgpiod-2.2.1"
+	gpiod_root="$cache_dir/libgpiod-2.3.0"
 	gpiod_install="$gpiod_root/install"
 	if [ ! -e "$gpiod_install/lib/libgpiod.so.3" ]
 	then
 		rm -rf "$gpiod_root"
-		wget -q https://mirrors.edge.kernel.org/pub/software/libs/libgpiod/libgpiod-2.2.1.tar.xz -O "$cache_dir/libgpiod-2.2.1.tar.xz" || exit 99
-		tar -xJf "$cache_dir/libgpiod-2.2.1.tar.xz" -C "$cache_dir" || exit 99
+		wget -q https://mirrors.edge.kernel.org/pub/software/libs/libgpiod/libgpiod-2.3.0.tar.xz -O "$cache_dir/libgpiod-2.3.0.tar.xz" || exit 99
+		tar -xJf "$cache_dir/libgpiod-2.3.0.tar.xz" -C "$cache_dir" || exit 99
 		meson setup "$gpiod_root/build" "$gpiod_root" --prefix="$gpiod_install" -Dtests=false || exit 99
 		meson compile -C "$gpiod_root/build" || exit 99
 		meson install -C "$gpiod_root/build" || exit 99
