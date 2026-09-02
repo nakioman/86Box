@@ -367,14 +367,7 @@ ui_sb_update_icon(int tag, int active)
             break;
         case SB_HDD:
             machine_status.hdd[item].active = active > 0 ? true : false;
-#ifdef USE_GPIO
-            if (gpio_hdd_pin >= 0) {
-                int any_active = 0;
-                for (int i = 0; i < HDD_BUS_USB; i++)
-                    if (machine_status.hdd[i].active) { any_active = 1; break; }
-                gpio_set_pin(gpio_hdd_pin, any_active);
-            }
-#endif
+            gpio_hdd_activity();
             break;
         case SB_NETWORK:
             machine_status.net[item].active = active > 0 ? true : false;
@@ -414,14 +407,7 @@ ui_sb_update_icon_write(int tag, int write)
             break;
         case SB_HDD:
             machine_status.hdd[item].write_active = write > 0 ? true : false;
-#ifdef USE_GPIO
-            if (gpio_hdd_pin >= 0) {
-                int any_active = 0;
-                for (int i = 0; i < HDD_BUS_USB; i++)
-                    if (machine_status.hdd[i].active || machine_status.hdd[i].write_active) { any_active = 1; break; }
-                gpio_set_pin(gpio_hdd_pin, any_active);
-            }
-#endif
+            gpio_hdd_activity();
             break;
         case SB_NETWORK:
             machine_status.net[item].write_active = write > 0 ? true : false;

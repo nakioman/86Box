@@ -15,6 +15,7 @@ env:
     -D USE_SDL_SHADER=ON
     -D NEW_DYNAREC=ON
     -D FLOPPY_CONTROL_SOCKET=ON
+    -D GPIO=ON
   ASSETS_REPOSITORY: https://github.com/86Box/assets.git
   MDSX_REPOSITORY: https://github.com/86Box/mdsx.git
 
@@ -56,6 +57,7 @@ jobs:
           libvdeplug-dev
           libserialport-dev
           libzstd-dev
+          libgpiod-dev
 
       - name: Configure CMake
         run: >-
@@ -124,6 +126,7 @@ jobs:
           -D USE_SDL_SHADER=ON
           -D NEW_DYNAREC=ON
           -D FLOPPY_CONTROL_SOCKET=ON
+          -D GPIO=ON
           -D BUILD_TYPE=release
           -D EMU_BUILD_NUM=$BUILD_NUMBER
 

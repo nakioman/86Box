@@ -53,6 +53,7 @@ AppDir:
     - libfreetype6
     - libopenal1
     - libgomp1
+    - libgpiod3 # if GPIO:BOOL=ON
     - libgs10
     - libpng16-16
     - libqt6core6t64 # if QT:BOOL=ON

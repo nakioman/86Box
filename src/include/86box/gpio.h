@@ -22,10 +22,16 @@ extern "C" {
 extern void gpio_init(void);
 extern void gpio_close(void);
 extern void gpio_set_pin(int pin, int active);
+
+/* Re-evaluates the hard disk activity in machine_status and drives the
+   configured HDD activity pin accordingly. Frontends call this after
+   updating machine_status.hdd[], so the aggregation lives in one place. */
+extern void gpio_hdd_activity(void);
 #else
 static inline void gpio_init(void) { }
 static inline void gpio_close(void) { }
 static inline void gpio_set_pin(int pin, int active) { (void) pin; (void) active; }
+static inline void gpio_hdd_activity(void) { }
 #endif
 
 #ifdef __cplusplus

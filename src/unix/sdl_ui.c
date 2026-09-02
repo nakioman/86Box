@@ -4,8 +4,24 @@
 #include <SDL3/SDL.h>
 #endif
 
+#include <stdbool.h>
+
 #include <86box/86box.h>
 #include <86box/plat.h>
+#include <86box/timer.h>
+#include <86box/device.h>
+#include <86box/fdd.h>
+#include <86box/scsi.h>
+#include <86box/scsi_device.h>
+#include <86box/cdrom.h>
+#include <86box/rdisk.h>
+#include <86box/mo.h>
+#include <86box/scsi_tape.h>
+#include <86box/hdd.h>
+#include <86box/thread.h>
+#include <86box/network.h>
+#include <86box/machine_status.h>
+#include <86box/gpio.h>
 #include <86box/ui.h>
 #include <86box/version.h>
 
@@ -66,12 +82,25 @@ ui_sb_update_icon_state(int tag, int state)
 void
 ui_sb_update_icon(int tag, int active)
 {
+    /* The OSD does not track device state yet, so keep machine_status up to
+       date here for the hard disks, which is what the GPIO activity LED is
+       driven from. */
+    if (((((unsigned int) tag) & 0xfffffff0) == SB_HDD) && ((tag & 0xf) < HDD_BUS_USB)) {
+        machine_status.hdd[tag & 0xf].active = active > 0 ? true : false;
+        gpio_hdd_activity();
+    }
+
     osd_ui_sb_update_icon(tag, active);
 }
 
 void
 ui_sb_update_icon_write(int tag, int active)
 {
+    if (((((unsigned int) tag) & 0xfffffff0) == SB_HDD) && ((tag & 0xf) < HDD_BUS_USB)) {
+        machine_status.hdd[tag & 0xf].write_active = active > 0 ? true : false;
+        gpio_hdd_activity();
+    }
+
     osd_ui_sb_update_icon_write(tag, active);
 }
 

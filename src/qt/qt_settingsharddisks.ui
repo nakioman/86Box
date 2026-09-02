@@ -196,13 +196,20 @@
          <number>-1</number>
         </property>
         <property name="maximum">
-         <number>63</number>
+         <number>1024</number>
         </property>
         <property name="value">
          <number>-1</number>
         </property>
         <property name="specialValueText">
          <string>Disabled</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="4">
+       <widget class="QCheckBox" name="checkBoxGpioActiveLow">
+        <property name="text">
+         <string>Active low (LED lights when the pin is driven low)</string>
         </property>
        </widget>
       </item>
