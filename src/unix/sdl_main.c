@@ -48,6 +48,8 @@
 
 extern SDL_Window         *sdl_win;
 
+extern void sdl_ui_activity_tick(void);
+
 int             rctrl_is_lalt;
 int             update_icons;
 int             kbd_req_capture;
@@ -244,6 +246,10 @@ main_thread(UNUSED(void *param))
         }
         else /* Just so we dont overload the host OS. */
             SDL_Delay(1);
+
+        /* Let the device activity flags decay, so the GPIO activity LED
+           follows the disk instead of latching on. */
+        sdl_ui_activity_tick();
 
         /* If needed, handle a screen resize. */
         if (atomic_load(&doresize_monitors[0]) && !video_fullscreen && !is_quit) {

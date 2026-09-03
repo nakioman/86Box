@@ -5,6 +5,7 @@
 #endif
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include <86box/86box.h>
 #include <86box/plat.h>
@@ -108,6 +109,29 @@ void
 ui_sb_update_icon_wp(int tag, int state)
 {
     osd_ui_sb_update_icon_wp(tag, state);
+}
+
+/* The device code only ever raises the activity flags; clearing them again is
+   the frontend's job, which the Qt status bar does from its 75 ms refresh
+   timer. Nothing did it here, so the first disk access latched the HDD
+   activity LED on for good. Runs on the emulation thread, the same one the
+   device code raises the flags from. */
+void
+sdl_ui_activity_tick(void)
+{
+    static uint64_t last_tick = 0;
+    const uint64_t  now       = SDL_GetTicks();
+
+    if ((now - last_tick) < 75)
+        return;
+    last_tick = now;
+
+    for (int i = 0; i < HDD_BUS_USB; i++) {
+        if (machine_status.hdd[i].active)
+            ui_sb_update_icon(SB_HDD | i, 0);
+        if (machine_status.hdd[i].write_active)
+            ui_sb_update_icon_write(SB_HDD | i, 0);
+    }
 }
 
 void
