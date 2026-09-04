@@ -4,6 +4,8 @@
 #endif
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 #ifdef USE_SDL2_LIB
 #include <SDL.h>
 #else
@@ -31,6 +33,7 @@
 #define HAVE_STDARG_H
 #include <86box/86box.h>
 #include <86box/plat.h>
+#include <86box/version.h>
 #include <86box/video.h>
 
 #include "sdl_osd.h"
@@ -59,6 +62,35 @@ static bool osd_visible        = false;
 static bool pending_close      = false;
 static bool mouse_was_captured = false;
 static int  osd_font_pixel_size = 0;
+
+/* ui_emu_status() builds the window title as
+   "<name> v<version> - <speed>% - <machine> - <cpu> - <mouse hint>".
+   The name and speed get their own line in the OSD's title bar, so skip the
+   two leading fields here and keep the rest as-is. */
+static const char *osd_title_without_prefix(const char *title)
+{
+    const char *rest = title;
+
+    for (int i = 0; i < 2; i++) {
+        const char *sep = strstr(rest, " - ");
+        if (sep == nullptr)
+            return title; /* unexpected format: show it verbatim */
+        rest = sep + 3;
+    }
+
+    return rest;
+}
+
+/* Refresh both lines. Called per frame so the speed keeps counting. */
+static void osd_refresh_title(void)
+{
+    char header[128];
+
+    snprintf(header, sizeof(header), "%s v%s - %d%%",
+             EMU_NAME, EMU_VERSION_FULL, osd_percentage);
+    osd_core_set_header(header);
+    osd_core_set_title(osd_title_without_prefix(sdl_win_title));
+}
 
 static void osd_set_scale(float scale)
 {
@@ -210,7 +242,6 @@ int osd_open(SDL_Event event)
 {
     (void)event;
     osd_visible = true;
-    osd_core_set_title(sdl_win_title);
     osd_core_reset_to_menu();
 
     mouse_was_captured = mouse_capture;
@@ -279,6 +310,8 @@ void osd_present(int output_w, int output_h)
 {
     if (!osd_visible || !osd_inited)
         return;
+
+    osd_refresh_title();
 
 #ifdef USE_SDL_SHADER_PIPELINE
     (void) output_w;
