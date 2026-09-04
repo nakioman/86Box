@@ -86,6 +86,7 @@ static OsdExplorer       explorer;
 static OsdExplorerConfig explorer_config;
 
 static char      osd_title[512] = "";
+static char      osd_header[128] = "";
 static osd_host_t osd_host       = { nullptr, nullptr };
 static float      osd_layout_scale = 1.0f;
 static float      osd_font_raster_scale = 1.0f;
@@ -525,6 +526,36 @@ static void activate_menu_item(int idx, bool *close_osd)
         current_view = mi.view;
 }
 
+/* Draw a line of disabled text, scrolling it as a marquee when it is wider
+   than the available width. Short text is drawn as plain static text. */
+static void draw_marquee(const char *text)
+{
+    const float  avail = ImGui::GetContentRegionAvail().x;
+    const ImVec2 size  = ImGui::CalcTextSize(text);
+
+    if (size.x <= avail) {
+        ImGui::TextDisabled("%s", text);
+        return;
+    }
+
+    /* One text run plus a gap, repeated twice so the tail wraps seamlessly
+       into the head instead of leaving a blank sweep. */
+    const float gap   = ImGui::GetFontSize() * 3.0f;
+    const float span  = size.x + gap;
+    const float speed = ImGui::GetFontSize() * 3.0f; /* pixels per second */
+    const float scroll = std::fmod((float) ImGui::GetTime() * speed, span);
+
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(ImVec2(avail, size.y)); /* reserve the row for layout */
+
+    ImDrawList *dl  = ImGui::GetWindowDrawList();
+    const ImU32 col = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    dl->PushClipRect(pos, ImVec2(pos.x + avail, pos.y + size.y), true);
+    dl->AddText(ImVec2(pos.x - scroll, pos.y), col, text);
+    dl->AddText(ImVec2(pos.x - scroll + span, pos.y), col, text);
+    dl->PopClipRect();
+}
+
 /* ------------------------------------------------------------------ */
 /*  Draw: Main menu                                                    */
 /* ------------------------------------------------------------------ */
@@ -558,14 +589,20 @@ static bool draw_menu(void)
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(osd_core_scaled(320.0f), osd_core_scaled(0.0f)), ImGuiCond_Always);
 
-    ImGui::Begin("86Box OSD", nullptr,
+    /* Frontends may put their own text in the title bar. Everything after ###
+       is the window ID, so a changing label doesn't reset the window state. */
+    char win_label[160];
+    snprintf(win_label, sizeof(win_label), "%s###86BoxOSD",
+             osd_header[0] ? osd_header : "86Box OSD");
+
+    ImGui::Begin(win_label, nullptr,
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
                  ImGuiWindowFlags_NoNav);
 
     /* Show window title (machine info) */
     if (osd_title[0]) {
-        ImGui::TextDisabled("%s", osd_title);
+        draw_marquee(osd_title);
         ImGui::Separator();
     }
 
@@ -708,6 +745,13 @@ void osd_core_set_title(const char *title)
     if (!title) { osd_title[0] = '\0'; return; }
     strncpy(osd_title, title, sizeof(osd_title) - 1);
     osd_title[sizeof(osd_title) - 1] = '\0';
+}
+
+void osd_core_set_header(const char *header)
+{
+    if (!header) { osd_header[0] = '\0'; return; }
+    strncpy(osd_header, header, sizeof(osd_header) - 1);
+    osd_header[sizeof(osd_header) - 1] = '\0';
 }
 
 void osd_core_reset_to_menu(void)

@@ -767,6 +767,9 @@ ui_window_title(char *str)
 void
 ui_emu_status(int speed_percent)
 {
+    extern int osd_percentage;
+    osd_percentage = speed_percent;
+
     int mouse_msg_idx = ((mouse_type == MOUSE_TYPE_NONE) || (mouse_input_mode >= 1)) ? 2 : !!mouse_capture;
     char temp[200];
     snprintf(temp, sizeof(temp), mouse_msg[mouse_msg_idx], speed_percent);

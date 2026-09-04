@@ -33,8 +33,15 @@ void osd_core_rebuild_default_font(int pixel_size);
 /* Apply the retro/CRT style to the current ImGui context. */
 void osd_core_setup_style(void);
 
-/* Machine/window title shown at the top of the main menu. */
+/* Machine/window title shown at the top of the main menu. Scrolls as a
+ * marquee when it is too wide to fit. */
 void osd_core_set_title(const char *title);
+
+/* Optional title bar text. Empty (the default) keeps "86Box OSD". */
+void osd_core_set_header(const char *header);
+
+/* Emulation speed in percent, refreshed once a second by ui_emu_status(). */
+extern int osd_percentage;
 
 /* Reset the view back to the main menu. */
 void osd_core_reset_to_menu(void);
