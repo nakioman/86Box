@@ -244,7 +244,7 @@ fdd_runtime_inserted(int drive)
     if (drive < 0 || drive >= FDD_NUM)
         return 0;
 
-    return !drive_empty[drive] && (floppyfns[drive][0] != '\0');
+    return !drives[drive].empty && (drives[drive].image_path[0] != '\0');
 }
 
 int
@@ -253,7 +253,7 @@ fdd_get_effective_read_only(int drive)
     if (drive < 0 || drive >= FDD_NUM)
         return 0;
 
-    return !!(ui_writeprot[drive] || writeprot[drive] || fwriteprot[drive]);
+    return !!(drives[drive].read_only || drives[drive].writeprot);
 }
 
 int
@@ -262,7 +262,7 @@ fdd_is_busy(int drive)
     if (drive < 0 || drive >= FDD_NUM)
         return 0;
 
-    if (fdd_seek_in_progress[drive])
+    if (drives[drive].seek_in_progress)
         return 1;
 
     return 0;
