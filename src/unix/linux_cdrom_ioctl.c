@@ -50,7 +50,27 @@ typedef struct ioctl_t {
     char      path[256];
     pthread_t poll_tid;
     int       poll_active;
+
+    /*
+     * Read-ahead for data sectors, see ioctl_ra_read(). Only touched by the
+     * emulation thread; ra_gen is bumped by any thread that re-reads the TOC
+     * or sees a medium change, which invalidates the cached block.
+     */
+    int       ra_gen;
+    int       ra_valid;
+    int       ra_valid_gen;
+    uint32_t  ra_lba;
+    int       ra_count;
+    int       ra_single_left;
+    uint8_t   ra_buf[16 * 2368];
 } ioctl_t;
+
+/* Sectors per read-ahead READ CD. */
+#define IOCTL_RA_SECTORS     16
+/* Bytes per sector as returned by READ CD with all fields plus formatted Q. */
+#define IOCTL_RA_SECTOR_LEN  2368
+/* Sectors read one at a time after a failed read-ahead before trying again. */
+#define IOCTL_RA_FALLBACK    64
 
 static int ioctl_read_dvd_structure(const void *local, uint8_t layer, uint8_t format,
                                     uint8_t *buffer, uint32_t *info);
@@ -238,6 +258,10 @@ ioctl_read_raw_toc(ioctl_t *ioctl)
 
     ioctl->is_dvd = (ioctl_read_dvd_structure(ioctl, 0, 0, buffer, NULL) > 0);
     free(buffer);
+
+    /* New TOC: drop the read-ahead block and start with read-ahead allowed. */
+    __atomic_add_fetch(&ioctl->ra_gen, 1, __ATOMIC_RELEASE);
+    ioctl->ra_single_left = 0;
 
     ioctl->has_audio  = 0;
     ioctl->has_data   = 0;
@@ -456,6 +480,141 @@ ioctl_get_raw_track_info(const void *local, int *num, uint8_t *rti)
     memcpy(rti, ioctl->cur_rti, ioctl->blocks_num * 11);
 }
 
+/*
+ * Number of sectors a read-ahead starting at lba may cover: at most
+ * IOCTL_RA_SECTORS, never past the last block or into the next track.
+ */
+static int
+ioctl_ra_span(const ioctl_t *ioctl, const uint32_t lba)
+{
+    const raw_track_info_t *rti   = (const raw_track_info_t *) ioctl->cur_rti;
+    uint32_t                last  = 0;
+    uint32_t                count = IOCTL_RA_SECTORS;
+    int                     found = 0;
+
+    for (int i = 0; i < ioctl->blocks_num; i++) {
+        const raw_track_info_t *ct    = &(rti[i]);
+        const uint32_t          start = (ct->pm * 60 * 75) + (ct->ps * 75) + ct->pf - 150;
+
+        if (ct->point == 0xa2) {
+            last  = start - 1;
+            found = 1;
+        } else if ((ct->point >= 1) && (ct->point <= 99) && (start > lba) &&
+                   ((start - lba) < count))
+            count = start - lba;
+    }
+
+    if (!found || (lba > last))
+        return 0;
+
+    if ((last - lba + 1) < count)
+        count = last - lba + 1;
+
+    return (int) count;
+}
+
+/*
+ * Read a full transfer with SG_IO. Unlike sg_io_cmd(), any sense data or
+ * short transfer counts as failure, so a block containing an unreadable or
+ * recovered sector is never served from the read-ahead and every sector in
+ * it gets its own single-sector READ CD with its exact result.
+ */
+static int
+ioctl_ra_sg_read(int fd, const uint8_t *cdb, uint8_t *buf, int len)
+{
+    sg_io_hdr_t io_hdr;
+    uint8_t     sense[64];
+
+    memset(&io_hdr, 0, sizeof(sg_io_hdr_t));
+    memset(sense, 0, sizeof(sense));
+    io_hdr.interface_id    = 'S';
+    io_hdr.cmd_len         = 12;
+    io_hdr.mx_sb_len       = sizeof(sense);
+    io_hdr.dxfer_direction = SG_DXFER_FROM_DEV;
+    io_hdr.dxfer_len       = len;
+    io_hdr.dxferp          = buf;
+    io_hdr.cmdp            = (unsigned char *) cdb;
+    io_hdr.sbp             = sense;
+    io_hdr.timeout         = 6000;
+
+    if (ioctl(fd, SG_IO, &io_hdr) < 0)
+        return 0;
+
+    return ((io_hdr.info & SG_INFO_OK_MASK) == SG_INFO_OK) &&
+           (io_hdr.sb_len_wr == 0) && (io_hdr.status == 0) &&
+           (io_hdr.resid == 0);
+}
+
+/*
+ * Serve a CD data sector (2352 bytes plus 16 bytes of formatted Q) from a
+ * synchronous read-ahead block, filling the block with one multi-sector
+ * READ CD when the sector is not in it. Returns 1 if the buffer was filled,
+ * 0 if the caller has to do a normal single-sector read.
+ *
+ * There is no background prefetch: the drive is only asked for sectors at
+ * the position the guest is reading, so nothing reaches into a damaged or
+ * protected region ahead of the guest and nothing can block the emulation
+ * thread except the read the guest itself asked for. After a failed block
+ * read, the next IOCTL_RA_FALLBACK sectors are read one at a time, so a run
+ * of unreadable sectors costs one extra failing READ CD on entry instead of
+ * one per sector.
+ */
+static int
+ioctl_ra_read(ioctl_t *ioctl, uint8_t *buffer, const uint32_t lba)
+{
+    const int gen = __atomic_load_n(&ioctl->ra_gen, __ATOMIC_ACQUIRE);
+    uint8_t   cdb[12];
+    int       count;
+
+    if (!cdrom_ioctl_read_ahead)
+        return 0;
+
+    if (ioctl->ra_valid && (ioctl->ra_valid_gen == gen) &&
+        (lba >= ioctl->ra_lba) && (lba < (ioctl->ra_lba + ioctl->ra_count))) {
+        memcpy(buffer, &(ioctl->ra_buf[(lba - ioctl->ra_lba) * IOCTL_RA_SECTOR_LEN]),
+               IOCTL_RA_SECTOR_LEN);
+        return 1;
+    }
+
+    ioctl->ra_valid = 0;
+
+    if (ioctl->ra_single_left > 0)
+        return 0;
+
+    count = ioctl_ra_span(ioctl, lba);
+    if (count < 2)
+        return 0;
+
+    memset(cdb, 0, sizeof(cdb));
+    cdb[0]  = 0xbe;                     /* READ CD */
+    cdb[2]  = (lba >> 24) & 0xff;
+    cdb[3]  = (lba >> 16) & 0xff;
+    cdb[4]  = (lba >> 8) & 0xff;
+    cdb[5]  = lba & 0xff;               /* Starting LBA */
+    cdb[8]  = count & 0xff;             /* Transfer Length */
+    cdb[9]  = 0xf8;                     /* Sync, header, user data, EDC/ECC */
+    cdb[10] = 0x02;                     /* Formatted Q */
+
+    if (!ioctl_ra_sg_read(ioctl->fd, cdb, ioctl->ra_buf, count * IOCTL_RA_SECTOR_LEN)) {
+        ioctl_log(ioctl->log, "Read-ahead of %i sectors at %08X failed, "
+                  "reading single sectors\n", count, lba);
+        ioctl->ra_single_left = IOCTL_RA_FALLBACK;
+        return 0;
+    }
+
+    /* The medium or TOC changed while the drive was reading. */
+    if (__atomic_load_n(&ioctl->ra_gen, __ATOMIC_ACQUIRE) != gen)
+        return 0;
+
+    ioctl->ra_lba       = lba;
+    ioctl->ra_count     = count;
+    ioctl->ra_valid     = 1;
+    ioctl->ra_valid_gen = gen;
+
+    memcpy(buffer, ioctl->ra_buf, IOCTL_RA_SECTOR_LEN);
+    return 1;
+}
+
 static int
 ioctl_read_sector(const void *local, uint8_t *buffer, uint32_t const sector)
 {
@@ -613,6 +772,10 @@ ioctl_read_sector(const void *local, uint8_t *buffer, uint32_t const sector)
                 memset(buffer, 0x00, RAW_SECTOR_SIZE);
             ret = -1;
         }
+    } else if ((sector != 0xffffffff) && ioctl_ra_read((ioctl_t *) ioctl, buffer, sector)) {
+        /* Served from the read-ahead block. */
+        ret      = 1;
+        data_len = len;
     } else {
         /* CD: use SG_IO with READ CD (0xBE). */
         uint8_t cdb[12];
@@ -662,6 +825,17 @@ ioctl_read_sector(const void *local, uint8_t *buffer, uint32_t const sector)
 
         ret = ret ? 1 : -1;
         data_len = len; /* sg_io_cmd handles this internally */
+
+        /* In single-sector mode after a failed read-ahead: stay there while
+           reads keep failing, count down on good reads. */
+        if (sector != 0xffffffff) {
+            ioctl_t *ra = (ioctl_t *) ioctl;
+
+            if (ret <= 0)
+                ra->ra_single_left = IOCTL_RA_FALLBACK;
+            else if (ra->ra_single_left > 0)
+                ra->ra_single_left--;
+        }
     }
 
     ioctl_log(ioctl->log, "ioctl_read_sector: final ret = %i\n", ret);
@@ -851,6 +1025,7 @@ ioctl_poll_thread(void *arg)
 
         int now_empty = ioctl_is_empty(ioctl);
         if (now_empty != was_empty) {
+            __atomic_add_fetch(&ioctl->ra_gen, 1, __ATOMIC_RELEASE);
             if (now_empty)
                 cdrom_set_empty(ioctl->dev);
             else
