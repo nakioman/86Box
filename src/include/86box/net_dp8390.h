@@ -32,6 +32,8 @@
 #define DP8390_FLAG_EVEN_MAC   0x01
 #define DP8390_FLAG_CHECK_CR   0x02
 #define DP8390_FLAG_CLEAR_IRQ  0x04
+/* Stub: upstream 74e214b04 uses this flag without defining it; no behavior yet. */
+#define DP8390_FLAG_LOOP_TSR   0x08
 
 typedef struct dp8390_t {
     /* Page 0 */
