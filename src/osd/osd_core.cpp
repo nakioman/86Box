@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
@@ -25,8 +26,8 @@
 #include <86box/86box.h>
 extern "C"
 {
-#include <86box/machine.h>
 #include <86box/device.h>
+#include <86box/machine.h>
 #include <86box/version.h>
 #include <86box/mem.h>
 #include <86box/timer.h>
@@ -65,6 +66,9 @@ static constexpr float OSD_MAX_SCALE        = 6.0f;
 static constexpr float OSD_REF_WIDTH        = 768.0f;
 static constexpr float OSD_REF_HEIGHT       = 576.0f;
 
+/* Seconds a message stays on screen before it expires. */
+static constexpr float OSD_MESSAGE_SECONDS  = 3.0f;
+
 /* ------------------------------------------------------------------ */
 /*  State                                                              */
 /* ------------------------------------------------------------------ */
@@ -102,6 +106,32 @@ static int         log_ring_head  = 0;   /* next write slot */
 static int         log_ring_count = 0;   /* entries populated */
 static std::mutex  log_mutex;
 static bool        log_scroll_pending = false;
+
+/* ------------------------------------------------------------------ */
+/*  Transient message                                                  */
+/* ------------------------------------------------------------------ */
+static char       message_text[OSD_LOG_LINE_LEN];
+static float      message_left = 0.0f; /* seconds remaining, set by osd_core_show_message() */
+static bool       message_close_pending = false;
+static std::mutex message_mutex;
+
+static bool
+message_active(void)
+{
+    std::lock_guard<std::mutex> lock(message_mutex);
+
+    return message_left > 0.0f;
+}
+
+/* A message is meant to be read with the OSD out of the way, so posting one
+ * asks osd_core_build_ui() to dismiss it. True once per message. */
+static bool
+consume_close_request(void)
+{
+    std::lock_guard<std::mutex> lock(message_mutex);
+
+    return std::exchange(message_close_pending, false);
+}
 
 static void show_main_menu(void);
 static bool focused_button(const char *label, bool focused);
@@ -221,7 +251,7 @@ static const char *const floppy_exts[] = {
 
 /* .ccd/.nrg/.mdf not supported by backend; .mdx is encrypted MDS. */
 static const char *const cd_exts[] = {
-    ".iso", ".cue", ".toc", ".ccd", ".mds", ".mdx", ".aaruf", ".aaruformat", ".aif", nullptr
+    ".iso", ".cue", ".toc", ".ccd", ".mds", ".mdx", ".nrg", ".aaruf", ".aaruformat", ".aif", ".chd", nullptr
 };
 
 static const char *const rdisk_exts[] = {
@@ -254,36 +284,60 @@ static const char *const *exts_for_view(OsdView v)
 /* Last path mounted from each view */
 static char osd_last_mount[VIEW_MEDIA_TYPE][OSD_PATH_CAPACITY];
 
-/* Does the path exist, and hold what this view browses for? */
-static bool path_suits_view(OsdView view, char *path)
+/* Strip the wp:// write protection marker and check the path suits the view */
+static char *usable_path(OsdView view, char *path)
 {
-    if ((path == nullptr) || (path[0] == '\0'))
-        return false;
+    if (path == nullptr)
+        return nullptr;
+
+    if (strstr(path, "wp://") == path)
+        path += 5;
 
     /* Check if we are on a file (image) or directory (VISO folder) */
-    return (view == VIEW_CD_FOLDER) ? (plat_dir_check(path) != 0)
-                                    : (plat_file_check(path) != 0);
+    const bool suits = (view == VIEW_CD_FOLDER) ? plat_dir_check(path) : plat_file_check(path);
+
+    return suits ? path : nullptr;
 }
 
-/* Get the start directory from currently mounted image */
-static const char *browser_initial_path(OsdView view)
+/* Get image path from current mount, last mount in view or history */
+template <size_t entries>
+static char *
+last_known_path(OsdView view, char *mounted, char *(&history)[entries])
 {
-    char *path = nullptr;
+    char *candidates[] = { mounted, osd_last_mount[view] };
+
+    for (char *candidate : candidates)
+        if ((candidate = usable_path(view, candidate)) != nullptr)
+            return candidate;
+
+    /* Slots run newest first and can have gaps, so take the first usable one */
+    for (char *entry : history)
+        if ((entry = usable_path(view, entry)) != nullptr)
+            return entry;
+
+    return nullptr;
+}
+
+static const char *
+browser_initial_path(OsdView view)
+{
+    fdd_drive_t *drv = &drives[0];
 
     switch (view) {
-        case VIEW_FILE_FLOPPY: path = floppyfns[0];               break;
+        case VIEW_FILE_FLOPPY:
+            return last_known_path(view, drv->image_path, drives[0].image_history);
         case VIEW_FILE_CD:
-        case VIEW_CD_FOLDER:   path = cdrom[0].image_path;        break;
-        case VIEW_FILE_RDISK:  path = rdisk_drives[0].image_path; break;
-        case VIEW_FILE_CART:   path = cart_fns[0];                break;
-        case VIEW_FILE_MO:     path = mo_drives[0].image_path;    break;
-        default:                                                  break;
+        case VIEW_CD_FOLDER:
+            return last_known_path(view, cdrom[0].image_path, cdrom[0].image_history);
+        case VIEW_FILE_RDISK:
+            return last_known_path(view, rdisk_drives[0].image_path, rdisk_drives[0].image_history);
+        case VIEW_FILE_CART:
+            return last_known_path(view, cart_fns[0], cart_image_history[0]);
+        case VIEW_FILE_MO:
+            return last_known_path(view, mo_drives[0].image_path, mo_drives[0].image_history);
+        default:
+            return nullptr;
     }
-
-    if (!path_suits_view(view, path))
-        path = osd_last_mount[view];
-
-    return path_suits_view(view, path) ? path : nullptr;
 }
 
 /* ------------------------------------------------------------------ */
@@ -398,7 +452,8 @@ isFirstCdromAvailable(void)
         return false;
     if ((cdrom[0].bus_type == CDROM_BUS_SCSI) && !((machine_has_flags(machine, MACHINE_SCSI) > 0) || other_scsi_present) && (scsi_card_current[0] == 0) && (scsi_card_current[1] == 0) && (scsi_card_current[2] == 0) && (scsi_card_current[3] == 0))
         return false;
-    if ((cdrom[0].bus_type == CDROM_BUS_MITSUMI || cdrom[0].bus_type == CDROM_BUS_MKE) && (cdrom_interface_current == 0))
+    if ((cdrom[0].bus_type == CDROM_BUS_SONY || cdrom[0].bus_type == CDROM_BUS_MITSUMI || cdrom[0].bus_type == CDROM_BUS_MKE || cdrom[0].bus_type == CDROM_BUS_PHILIPS) && (cdrom_interface_current == 0) &&
+        !((cdrom[0].bus_type == CDROM_BUS_MITSUMI) && (machines[machine].init == machine_at_tandy_vis_init)))
         return false;
     if (cdrom[0].bus_type != 0) {
         return true;
@@ -435,14 +490,14 @@ isFirstMoAvailable(void)
 }
 
 static const MenuItem menu_items[] = {
-    { "Load Floppy Image...",      ACT_NONE,         VIEW_FILE_FLOPPY, [] () -> bool { return fdd_get_type(0); }                 },
+    { "Load Floppy Image...",      ACT_NONE,         VIEW_FILE_FLOPPY, [] () -> bool { return fdd_get_type(&drives[0]); }        },
     { "Load CD-ROM Image...",      ACT_NONE,         VIEW_FILE_CD,     isFirstCdromAvailable                                     },
     { "Mount CD Folder (VISO)...", ACT_NONE,         VIEW_CD_FOLDER,   isFirstCdromAvailable                                     },
     { "Load Removable Disk...",    ACT_NONE,         VIEW_FILE_RDISK,  isFirstRdiskAvailable                                     },
     { "Load Cartridge...",         ACT_NONE,         VIEW_FILE_CART,   [] () -> bool { return machine_has_cartridge(machine); }  },
     { "Load MO Image...",          ACT_NONE,         VIEW_FILE_MO,     isFirstMoAvailable                                        },
     { nullptr, ACT_NONE, VIEW_MENU }, /* separator */
-    { "Eject Floppy",              ACT_EJECT_FLOPPY, VIEW_MENU, [] () -> bool { return fdd_get_type(0) && floppyfns[0][0] != 0; }                        },
+    { "Eject Floppy",              ACT_EJECT_FLOPPY, VIEW_MENU, [] () -> bool { return fdd_get_type(&drives[0]) && drives[0].image_path[0] != 0; }               },
     { "Eject CD-ROM",              ACT_EJECT_CD,     VIEW_MENU, [] () -> bool { return isFirstCdromAvailable() && cdrom[0].image_path[0] != 0; }         },
     { "Eject Removable Disk",      ACT_EJECT_RDISK,  VIEW_MENU, [] () -> bool { return isFirstRdiskAvailable() && rdisk_drives[0].image_path[0] != 0; }  },
     { "Eject Cartridge",           ACT_EJECT_CART,   VIEW_MENU, [] () -> bool { return machine_has_cartridge(machine) && cart_fns[0][0] != 0; }          },
@@ -759,10 +814,10 @@ static bool draw_browser(void)
         /* Record selected path in osd_last_mount for next run. */
         snprintf(osd_last_mount[current_view], OSD_PATH_CAPACITY, "%s", result.path.data());
 
-        /* Mount the image/folder and proceed. */
+        /* Mount the image/folder and report it. Posting the message dismisses
+         * the OSD, handing input back to the machine. */
         mount_path(result.path.data());
-        current_view       = VIEW_LOG;
-        log_scroll_pending = true;
+        osd_core_show_message("Loading %s", result.path.data());
     } else if (result.type == OsdExplorerResultType::Cancelled)
         show_main_menu();
 
@@ -796,6 +851,9 @@ void osd_core_set_header(const char *header)
 
 void osd_core_reset_to_menu(void)
 {
+    /* Drop a request left over from a message posted with the OSD already
+     * closed, so it cannot dismiss this one. */
+    consume_close_request();
     show_main_menu();
 }
 
@@ -809,17 +867,42 @@ bool osd_core_escape(void)
 
 bool osd_core_build_ui(void)
 {
+    bool keep_open;
+
     switch (current_view) {
-        case VIEW_MENU:      return draw_menu();
-        case VIEW_LOG:       return draw_log();
-        default:             return draw_browser();
+        case VIEW_MENU:
+            keep_open = draw_menu();
+            break;
+        case VIEW_LOG:
+            keep_open = draw_log();
+            break;
+        default:
+            keep_open = draw_browser();
+            break;
     }
+
+    /* A message posted while drawing closes the OSD so it can be read. */
+    const bool dismissed = consume_close_request();
+
+    return keep_open && !dismissed;
 }
 
 int osd_percentage = 0;
 
+/* Single point of truth for whether the indicator layer has anything to show.
+ * Indicators live alongside normal emulation, so this must never consult OSD
+ * visibility. */
+static bool
+indicators_active(void)
+{
+    return false; /* nothing to draw while the block below is #if 0 */
+}
+
 void osd_core_draw_indicators(void)
 {
+    if (!indicators_active())
+        return;
+
 #if 0
     ImGuiWindowFlags window_flags = 0;
     window_flags |= ImGuiWindowFlags_NoBackground;
@@ -832,6 +915,70 @@ void osd_core_draw_indicators(void)
         ImGui::End();
     }
 #endif
+}
+
+void
+osd_core_draw_message(void)
+{
+    char  text[OSD_LOG_LINE_LEN];
+    float left;
+
+    {
+        std::lock_guard<std::mutex> lock(message_mutex);
+
+        if (message_left <= 0.0f)
+            return;
+
+        message_left -= ImGui::GetIO().DeltaTime;
+        left = message_left;
+        snprintf(text, sizeof(text), "%s", message_text);
+    }
+
+    if (left <= 0.0f)
+        return;
+
+    /* Click-through overlay, so the emulator keeps all input. */
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration;
+    flags |= ImGuiWindowFlags_NoInputs;
+    flags |= ImGuiWindowFlags_NoNav;
+    flags |= ImGuiWindowFlags_NoFocusOnAppearing;
+    flags |= ImGuiWindowFlags_NoSavedSettings;
+    flags |= ImGuiWindowFlags_AlwaysAutoResize;
+
+    ImGui::SetNextWindowPos(ImVec2(osd_core_scaled(8.0f), osd_core_scaled(8.0f)));
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, std::min(1.0f, left)); /* fade out over the last second */
+    if (ImGui::Begin("##osd_message", nullptr, flags))
+        ImGui::TextUnformatted(text);
+    ImGui::End();
+    ImGui::PopStyleVar();
+}
+
+/* True when the core wants a frame with the OSD closed. Frontends gate their
+ * rendering on this, so a new always-on layer only has to be taught to
+ * indicators_active() to start reaching the screen. */
+bool
+osd_core_needs_render(void)
+{
+    return indicators_active() || message_active();
+}
+
+void
+osd_core_show_message(const char *text, ...)
+{
+    std::lock_guard<std::mutex> lock(message_mutex);
+
+    if (text == nullptr)
+        message_text[0] = '\0';
+    else {
+        va_list ap;
+
+        va_start(ap, text);
+        vsnprintf(message_text, sizeof(message_text), text, ap);
+        va_end(ap);
+    }
+
+    message_left          = (message_text[0] != '\0') ? OSD_MESSAGE_SECONDS : 0.0f;
+    message_close_pending = (message_left > 0.0f);
 }
 
 void osd_core_install_log_hook(void)

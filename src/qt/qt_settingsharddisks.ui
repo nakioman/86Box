@@ -81,6 +81,12 @@
       </item>
       <item row="0" column="3">
        <widget class="QComboBox" name="comboBoxChannel">
+        <property name="sizeAdjustPolicy">
+         <enum>QComboBox::AdjustToMinimumContentsLengthWithIcon</enum>
+        </property>
+        <property name="minimumContentsLength">
+         <number>20</number>
+        </property>
         <property name="maxVisibleItems">
          <number>30</number>
         </property>
@@ -110,6 +116,19 @@
           <verstretch>0</verstretch>
          </sizepolicy>
         </property>
+       </widget>
+      </item>
+      <item row="1" column="4">
+       <widget class="QPushButton" name="pushButtonConfigure">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Fixed" vsizetype="Preferred">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+       <property name="text">
+        <string>Configure</string>
+       </property>
        </widget>
       </item>
       <item row="2" column="0">

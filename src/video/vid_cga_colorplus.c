@@ -146,10 +146,16 @@ colorplus_poll(void *priv)
     const uint8_t   *plane0     = colorplus->cga.vram;
     const uint8_t   *plane1     = colorplus->cga.vram + 0x4000;
 
+    /* Bind the monitor macros to this card's own display. */
+    const int prev_monitor_index = monitor_index_global;
+
+    monitor_index_global = colorplus->cga.monitor_used;
+
     /* If one of the extra modes is not selected, drop down to the CGA
      * drawing code. */
     if (!((colorplus->control & COLORPLUS_EITHER_MODE) && (colorplus->cga.cgamode & CGA_MODE_FLAG_GRAPHICS))) {
         cga_poll(&colorplus->cga);
+        monitor_index_global = prev_monitor_index;
         return;
     }
 
@@ -355,6 +361,8 @@ colorplus_poll(void *priv)
                 colorplus->cga.charbuffer[x] = colorplus->cga.vram[((colorplus->cga.memaddr << 1) + x) & 0x3fff];
         }
     }
+
+    monitor_index_global = prev_monitor_index;
 }
 
 void
@@ -386,11 +394,14 @@ colorplus_standalone_init(UNUSED(const device_t *info))
     mem_mapping_add(&colorplus->cga.mapping, 0xb8000, 0x08000, colorplus_read, NULL, NULL, colorplus_write, NULL, NULL, NULL, MEM_MAPPING_EXTERNAL, colorplus);
     io_sethandler(0x03d0, 0x0010, colorplus_in, NULL, NULL, colorplus_out, NULL, NULL, colorplus);
 
-    colorplus->lpt = device_add_inst(&lpt_port_device, -1);
-    lpt_port_setup(colorplus->lpt, LPT_MDA_ADDR);
-    lpt_set_3bc_used(1);
+    if (!lpt_get_3bc_used()) {
+        colorplus->lpt = device_add_inst(&lpt_port_device, -1);
+        lpt_port_setup(colorplus->lpt, LPT_MDA_ADDR);
+        lpt_set_3bc_used(1);
+    }
 
     monitors[monitor_index_global].mon_composite = colorplus->cga.composite;
+    colorplus->cga.monitor_used                  = monitor_index_global;
 
     return colorplus;
 }

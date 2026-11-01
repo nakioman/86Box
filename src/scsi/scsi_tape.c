@@ -40,6 +40,9 @@
 #include <86box/ui.h>
 #include <86box/hdc_ide.h>
 #include <86box/scsi_tape.h>
+#include <86box/lpt.h>
+#include <86box/fdd_tape.h>
+#include <86box/lpt_ditto.h>
 #include <86box/version.h>
 
 #ifdef _WIN32
@@ -2774,11 +2777,10 @@ tape_phase_data_out(scsi_common_t *sc)
                 param_list_len = dev->current_cdb[4];
             }
 
-            if (dev->current_cdb[0] == GPCMD_MODE_SELECT_6) {
-                block_desc_len = dev->buffer[2];
-                block_desc_len <<= 8;
-                block_desc_len |= dev->buffer[3];
-            } else {
+            if (dev->current_cdb[0] == GPCMD_MODE_SELECT_6)
+                /* Byte 2 is the device-specific parameter (buffered mode and speed). */
+                block_desc_len = dev->buffer[3];
+            else {
                 block_desc_len = dev->buffer[6];
                 block_desc_len <<= 8;
                 block_desc_len |= dev->buffer[7];
@@ -2787,7 +2789,9 @@ tape_phase_data_out(scsi_common_t *sc)
             /* If there's a block descriptor, parse the block size from it. */
             if (block_desc_len >= 8) {
                 const uint8_t density = dev->buffer[hdr_len];
-                if (density != 0) {
+                /* SSC: density code 00h selects the default density and 7Fh
+                   leaves the current density unchanged. */
+                if ((density != 0x00) && (density != 0x7f)) {
                     int media = -1;
                     for (int i = 0; i < KNOWN_TAPE_TYPES; i++) {
                         if ((tape_types[i].density_code == density) &&
@@ -2890,7 +2894,7 @@ tape_get_max(UNUSED(const ide_t *ide), int ide_has_dma, const int type)
             ret = ide_has_dma ? 2 : -1;
             break;
         case TYPE_UDMA:
-            ret = ide_has_dma ? 5 : -1;
+            ret = ide_has_dma ? 6 : -1;
             break;
         default:
             ret = -1;
@@ -3042,10 +3046,64 @@ tape_drive_reset(const int c)
     }
 }
 
+/* Tears a drive's resources down; safe on any bus (the FDC and LPT buses
+   own nothing here, their priv stays NULL). */
+static void
+tape_drive_close(const int c)
+{
+    if (tape_drives[c].bus_type == TAPE_BUS_SCSI) {
+        const uint8_t scsi_bus = (tape_drives[c].scsi_device_id >> 4) & 0x0f;
+        const uint8_t scsi_id  = tape_drives[c].scsi_device_id & 0x0f;
+
+        memset(&scsi_devices[scsi_bus][scsi_id], 0x00, sizeof(scsi_device_t));
+    }
+
+    tape_t *dev = (tape_t *) tape_drives[c].priv;
+
+    if (dev) {
+        tape_disk_unload(dev);
+
+        if (dev->rec_buf)
+            free(dev->rec_buf);
+
+        if (dev->aux_buf)
+            free(dev->aux_buf);
+
+        if (dev->tf)
+            free(dev->tf);
+
+        if (dev->log != NULL) {
+            tape_log(dev->log, "Log closed\n");
+            log_close(dev->log);
+            dev->log = NULL;
+        }
+
+        free(dev);
+        tape_drives[c].priv = NULL;
+    }
+}
+
 void
 tape_hard_reset(void)
 {
     for (uint8_t c = 0; c < TAPE_NUM; c++) {
+        if ((tape_drives[c].bus_type != TAPE_BUS_SCSI) &&
+            (tape_drives[c].bus_type != TAPE_BUS_ATAPI)) {
+            /* A drive that switched buses between resets has its previous
+               bus's resources torn down here. */
+            if (tape_drives[c].priv != NULL)
+                tape_drive_close(c);
+
+            if (tape_drives[c].bus_type == TAPE_BUS_LPT) {
+                /* Parallel-port tape: instantiate the drive and let it
+                   claim the port the standard way, with lpt_attach() -
+                   first-claim-wins against any other LPT device. */
+                device_add_inst(&lpt_ditto_device, tape_drives[c].lpt_port + 1);
+            }
+
+            continue;
+        }
+
         if (tape_drives[c].bus_type == TAPE_BUS_SCSI) {
             const uint8_t scsi_bus = (tape_drives[c].scsi_device_id >> 4) & 0x0f;
             const uint8_t scsi_id  = tape_drives[c].scsi_device_id & 0x0f;
@@ -3092,38 +3150,8 @@ void
 tape_close(void)
 {
     for (uint8_t c = 0; c < TAPE_NUM; c++) {
-        if ((tape_drives[c].bus_type == TAPE_BUS_SCSI) || (tape_drives[c].bus_type == TAPE_BUS_ATAPI)) {
-            if (tape_drives[c].bus_type == TAPE_BUS_SCSI) {
-                const uint8_t scsi_bus = (tape_drives[c].scsi_device_id >> 4) & 0x0f;
-                const uint8_t scsi_id  = tape_drives[c].scsi_device_id & 0x0f;
-
-                memset(&scsi_devices[scsi_bus][scsi_id], 0x00, sizeof(scsi_device_t));
-            }
-
-            tape_t *dev = (tape_t *) tape_drives[c].priv;
-
-            if (dev) {
-                tape_disk_unload(dev);
-
-                if (dev->rec_buf)
-                    free(dev->rec_buf);
-
-                if (dev->aux_buf)
-                    free(dev->aux_buf);
-
-                if (dev->tf)
-                    free(dev->tf);
-
-                if (dev->log != NULL) {
-                    tape_log(dev->log, "Log closed\n");
-                    log_close(dev->log);
-                    dev->log = NULL;
-                }
-
-                free(dev);
-                tape_drives[c].priv = NULL;
-            }
-        }
+        if ((tape_drives[c].bus_type == TAPE_BUS_SCSI) || (tape_drives[c].bus_type == TAPE_BUS_ATAPI))
+            tape_drive_close(c);
 
 #if defined(ENABLE_TAPE_LOG) && defined(TAPE_FILE_LOG)
         if (tape_log_file) {
@@ -3132,5 +3160,100 @@ tape_close(void)
             tape_log_file = NULL;
         }
 #endif
+    }
+}
+
+/* Bus-agnostic runtime mount/eject, callable from the UI for any tape
+   drive. The mount accepts a "wp://" prefix as well as the flag. */
+
+void
+tape_drive_eject(int i)
+{
+    if ((i < 0) || (i >= TAPE_NUM))
+        return;
+
+    switch (tape_drives[i].bus_type) {
+        case TAPE_BUS_SCSI:
+        case TAPE_BUS_ATAPI: {
+            tape_t *dev = (tape_t *) tape_drives[i].priv;
+
+            if (dev == NULL)
+                return;
+
+            tape_disk_close(dev);
+            tape_drives[i].image_path[0] = 0x00;
+            /* Signal media change to the emulated machine. */
+            tape_insert(dev);
+            break;
+        }
+
+        case TAPE_BUS_FDC:
+            fdd_tape_eject();
+            break;
+
+        case TAPE_BUS_LPT:
+            lpt_ditto_eject();
+            break;
+
+        default:
+            break;
+    }
+}
+
+int
+tape_drive_mount(int i, const char *path, int read_only)
+{
+    char fn[MAX_IMAGE_PATH_LEN + 8];
+    int  was_empty;
+
+    if ((i < 0) || (i >= TAPE_NUM) || (path == NULL) || (path[0] == 0x00))
+        return 0;
+
+    /* A "wp://" prefix on the path means the same as the flag. */
+    if (strstr(path, "wp://") == path) {
+        path += 5;
+        read_only = 1;
+    }
+
+    if (read_only)
+        snprintf(fn, sizeof(fn), "wp://%s", path);
+    else
+        snprintf(fn, sizeof(fn), "%s", path);
+
+    switch (tape_drives[i].bus_type) {
+        case TAPE_BUS_SCSI:
+        case TAPE_BUS_ATAPI: {
+            tape_t *dev = (tape_t *) tape_drives[i].priv;
+
+            if (dev == NULL)
+                return 0;
+
+            was_empty = (tape_drives[i].fp == NULL);
+
+            tape_disk_close(dev);
+            tape_drives[i].read_only = read_only;
+            tape_load(dev, fn, 1);
+
+            /* Signal media change to the emulated machine. */
+            tape_insert(dev);
+            if (was_empty)
+                tape_insert(dev);
+
+            /* tape_load() keeps image_path up to date. */
+            return 1;
+        }
+
+        case TAPE_BUS_FDC:
+            /* fdd_tape_load() writes the image and read-only flag back
+               into the owning tape_drives[] entry. */
+            fdd_tape_load(fn);
+            return 1;
+
+        case TAPE_BUS_LPT:
+            lpt_ditto_load(fn, read_only);
+            return 1;
+
+        default:
+            return 0;
     }
 }

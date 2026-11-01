@@ -254,7 +254,6 @@ ioctl_read_raw_toc(ioctl_t *ioctl)
                 ioctl->has_data |= 1;
             else
                 ioctl->has_audio |= 1;
-            break;
         }
     }
 
@@ -861,7 +860,8 @@ static const cdrom_ops_t ioctl_ops = {
     ioctl_has_data,
     ioctl_is_empty,
     ioctl_close,
-    ioctl_load
+    ioctl_load,
+    NULL
 };
 
 /* Public functions. */

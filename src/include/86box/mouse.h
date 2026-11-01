@@ -24,6 +24,7 @@
 
 #define MOUSE_TYPE_NONE     0 /* no mouse configured */
 #define MOUSE_TYPE_INTERNAL 1 /* machine has internal mouse */
+#define TABLET_TYPE_INTERNAL 1 /* machine has an internal touch screen */
 #define MOUSE_TYPE_LOGIBUS  2 /* Logitech/ATI Bus Mouse */
 #define MOUSE_TYPE_INPORT   3 /* Microsoft InPort Mouse */
 #if 0
@@ -45,6 +46,10 @@
 #define MOUSE_TYPE_QPORT     0x40 /* Mouse is an on-board version of one of the above. */
 #define MOUSE_TYPE_ONBOARD   0x80 /* Mouse is an on-board version of one of the above. */
 
+/* Masks returned by mouse_get_release_buttons(). */
+#define MOUSE_RELEASE_MIDDLE 0x04 /* Middle button */
+#define MOUSE_RELEASE_THUMB  0x18 /* Thumb buttons (buttons 4 and 5) */
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -55,6 +60,7 @@ extern int    tablet_type;
 extern int    mouse_input_mode_initial;
 extern int    mouse_input_mode; /* 2 = Absolute (Visible Crosshair), 1 = Absolute, 0 = Relative */
 extern int    mouse_timed; /* 1 = Timed, 0 = Constant */
+extern int    mouse_automation; /* input injected by the automation socket */
 extern int    mouse_tablet_in_proximity;
 extern double mouse_x_abs;
 extern double mouse_y_abs;
@@ -76,6 +82,8 @@ extern const device_t mouse_msserial_device;
 extern const device_t mouse_msserial_ballpoint_device;
 extern const device_t mouse_ltserial_device;
 extern const device_t mouse_ps2_device;
+extern const device_t mouse_usb_device;
+extern const device_t tablet_usb_device;
 extern const device_t mouse_upc_device;
 extern const device_t mouse_upc_standalone_device;
 extern const device_t mouse_pxl_380_device;
@@ -84,6 +92,8 @@ extern const device_t mouse_wacom_tablet_device;
 extern const device_t mouse_wacom_artpad_tablet_device;
 #    endif
 extern const device_t mouse_mtouch_device;
+/* The IBM 7690 optical touch panel at interface-adapter ports F300h-F303h. */
+extern const device_t mouse_ibm7690_touch_device;
 extern const device_t mouse_cga_lightpen_device;
 #endif
 
@@ -115,6 +125,7 @@ extern void            mouse_subtract_w(int *delta_w, int min, int max, int inve
 extern void            mouse_set_buttons_ex(int b);
 extern int             mouse_get_buttons_ex(void);
 extern int             tablet_get_buttons_ex(void);
+extern int             tablet_take_pressed(void);
 extern void            mouse_set_sample_rate(double new_rate);
 extern void            mouse_update_sample_rate(void);
 extern void            mouse_set_buttons(int buttons);
@@ -133,6 +144,7 @@ extern const device_t *mouse_get_device(int mouse);
 extern const device_t *tablet_get_device(int mouse);
 #endif
 extern int             mouse_get_buttons(void);
+extern int             mouse_get_release_buttons(void);
 extern int             mouse_get_ndev(void);
 extern int             tablet_get_ndev(void);
 extern void            mouse_set_raw(int raw);
