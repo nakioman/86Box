@@ -439,6 +439,7 @@ load_general(void)
     force_constant_mouse = ini_section_get_int(cat, "force_constant_mouse", 0);
     mouse_auto_capture = ini_section_get_int(cat, "mouse_auto_capture", 0);
     cdrom_ioctl_read_ahead = ini_section_get_int(cat, "cdrom_ioctl_read_ahead", 1);
+    cdrom_ioctl_fast_reads = ini_section_get_int(cat, "cdrom_ioctl_fast_reads", 1);
     fdd_sounds_enabled = ini_section_get_int(cat, "fdd_sounds_enabled", 1);
 
 #ifdef USE_GPIO
@@ -3044,6 +3045,7 @@ config_load(void)
         force_constant_mouse = 0;
         mouse_auto_capture   = 0;
         cdrom_ioctl_read_ahead = 1;
+        cdrom_ioctl_fast_reads = 1;
 
         cpu_override_interpreter = 0;
         cpu_debug_regs_486       = 0;
@@ -3531,6 +3533,11 @@ save_general(void)
         ini_section_delete_var(cat, "cdrom_ioctl_read_ahead");
     else
         ini_section_set_int(cat, "cdrom_ioctl_read_ahead", 0);
+
+    if (cdrom_ioctl_fast_reads)
+        ini_section_delete_var(cat, "cdrom_ioctl_fast_reads");
+    else
+        ini_section_set_int(cat, "cdrom_ioctl_fast_reads", 0);
 
     if (fdd_sounds_enabled == 1)
         ini_section_delete_var(cat, "fdd_sounds_enabled");
