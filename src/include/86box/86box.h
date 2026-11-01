@@ -249,6 +249,7 @@ extern int    do_auto_dialog_pause;         /* (G) Auto-pause the emulator on di
 extern int    auto_paused;
 extern int    force_constant_mouse;         /* (C) Force constant updating of the mouse */
 extern int    mouse_auto_capture;          /* (C) Auto-capture mouse on start */
+extern int    cdrom_ioctl_read_ahead;      /* (C) Read ahead on host CD-ROM drives (Linux IOCTL) */
 extern double mouse_sensitivity;            /* (G) Mouse sensitivity scale */
 #ifdef _Atomic
 extern _Atomic double mouse_x_error;        /* Mouse error accumulator - Y */
