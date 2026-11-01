@@ -535,6 +535,84 @@ ioctl_read_sector(const void *local, uint8_t *buffer, uint32_t const sector)
             buffer[sc_offs + 8] = bin2bcd(s);
             buffer[sc_offs + 9] = bin2bcd(f);
         }
+    } else if (ioctl->dev->audio_read) {
+        /*
+         * CD audio play callback: read plain CD-DA and build Q from the TOC,
+         * like the Windows IOCTL fast path. The general READ CD below asks
+         * for header/EDC fields and the drive's formatted Q, which some
+         * drives reject or report as data for audio sectors, making the
+         * play callback output silence while the drive keeps reading.
+         */
+        int track = -1;
+
+        data_len = 0;
+        ret      = 0;
+
+        if (lba == 0xffffffff) {
+            /* Subchannel only: build it from the current play position. */
+            lba   = ioctl->dev->seek_pos;
+            track = ioctl_get_track(ioctl, lba);
+
+            if (track != -1) {
+                data_len = len;
+                ret      = 1;
+            }
+        } else {
+            uint8_t cdb[12];
+            uint8_t sense[64];
+            int     sense_len = 0;
+
+            len   = RAW_SECTOR_SIZE;
+            track = ioctl_get_track(ioctl, lba);
+
+            memset(cdb, 0, sizeof(cdb));
+            cdb[0]  = 0xbe;                     /* READ CD */
+            cdb[1]  = 0x04;                     /* Expected sector type: CD-DA */
+            cdb[2]  = (lba >> 24) & 0xff;
+            cdb[3]  = (lba >> 16) & 0xff;
+            cdb[4]  = (lba >> 8) & 0xff;
+            cdb[5]  = lba & 0xff;               /* Starting LBA */
+            cdb[8]  = 0x01;                     /* Transfer Length = 1 */
+            cdb[9]  = 0x10;                     /* User data only (2352 bytes) */
+            cdb[10] = 0x00;                     /* No subchannel */
+
+            memset(sense, 0, sizeof(sense));
+            ret = sg_io_cmd(ioctl->fd, cdb, 12, buffer, RAW_SECTOR_SIZE,
+                            SG_DXFER_FROM_DEV, sense, &sense_len);
+
+            ioctl_log(ioctl->log, "ioctl_read_sector (audio): LBA %08X, ret = %d, sense_len = %d\n",
+                      lba, ret, sense_len);
+
+            if (ret)
+                data_len = len;
+        }
+
+        if (ret && (data_len >= len) && (track != -1)) {
+            const raw_track_info_t *ct    = &(rti[track]);
+            const uint32_t          start = (ct->pm * 60 * 75) + (ct->ps * 75) + ct->pf;
+
+            /* Construct Q. */
+            buffer[sc_offs + 0] = (ct->adr_ctl >> 4) | ((ct->adr_ctl & 0xf) << 4);
+            buffer[sc_offs + 1] = bin2bcd(ct->point);
+            buffer[sc_offs + 2] = 1;
+            FRAMES_TO_MSF((int32_t) (lba + 150 - start), &m, &s, &f);
+            buffer[sc_offs + 3] = bin2bcd(m);
+            buffer[sc_offs + 4] = bin2bcd(s);
+            buffer[sc_offs + 5] = bin2bcd(f);
+            buffer[sc_offs + 6] = 0x00;
+            FRAMES_TO_MSF(lba + 150, &m, &s, &f);
+            buffer[sc_offs + 7] = bin2bcd(m);
+            buffer[sc_offs + 8] = bin2bcd(s);
+            buffer[sc_offs + 9] = bin2bcd(f);
+            buffer[sc_offs + 10] = 0x00;
+            buffer[sc_offs + 11] = 0x00;
+            ret = 1;
+        } else {
+            /* Failed read: play silence rather than a stale buffer. */
+            if (sector != 0xffffffff)
+                memset(buffer, 0x00, RAW_SECTOR_SIZE);
+            ret = -1;
+        }
     } else {
         /* CD: use SG_IO with READ CD (0xBE). */
         uint8_t cdb[12];
