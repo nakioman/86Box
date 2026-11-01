@@ -1661,6 +1661,32 @@ cdrom_seek(cdrom_t *dev, const uint32_t pos, const uint8_t vendor_type)
     dev->subc_sector = -1;
 }
 
+/*
+   Ask a host drive backend to start reading sectors in the background, so the
+   emulated drive can stay busy while the machine keeps running instead of
+   blocking the emulation thread on the host read. No-op for other backends.
+ */
+void
+cdrom_host_prefetch(cdrom_t *dev, const uint32_t lba, const uint32_t count)
+{
+    if ((dev != NULL) && (dev->ops != NULL) && (dev->ops->prefetch != NULL) &&
+        (dev->ops->ready != NULL))
+        dev->ops->prefetch(dev->local, lba, count);
+}
+
+/* Nonzero unless a background host read started by cdrom_host_prefetch() is in progress. */
+int
+cdrom_host_ready(const cdrom_t *dev)
+{
+    int ret = 1;
+
+    if ((dev != NULL) && (dev->ops != NULL) && (dev->ops->prefetch != NULL) &&
+        (dev->ops->ready != NULL))
+        ret = dev->ops->ready(dev->local);
+
+    return ret;
+}
+
 int
 cdrom_has_data(cdrom_t *dev)
 {

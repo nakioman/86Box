@@ -143,6 +143,11 @@ typedef struct ide_s {
     void    (*command_stop)(scsi_common_t *sc);
     void    (*bus_master_error)(scsi_common_t *sc);
     void    (*read)(scsi_common_t *sc);
+    /*
+       Optional: called before a data-in phase is entered. Returns nonzero if the
+       device is still waiting for host data and has re-armed its callback.
+     */
+    int     (*host_wait)(scsi_common_t *sc);
     void    (*write)(scsi_common_t *sc);
 #else
     void *  get_max;

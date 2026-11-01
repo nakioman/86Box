@@ -1327,6 +1327,12 @@ ide_atapi_callback(ide_t *ide)
     ide_log("Phase: %02X (%s)\n", ide->sc->packet_status, phase);
 #endif
 
+    /* The device is still waiting for its host drive: stay busy. */
+    if (((ide->sc->packet_status == PHASE_DATA_IN) ||
+         (ide->sc->packet_status == PHASE_DATA_IN_DMA)) &&
+        (ide->host_wait != NULL) && ide->host_wait(ide->sc))
+        return;
+
     switch (ide->sc->packet_status) {
         default:
             ret              = 0;

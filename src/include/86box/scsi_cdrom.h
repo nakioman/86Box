@@ -79,6 +79,12 @@ typedef struct scsi_cdrom_t {
 
     mode_sense_pages_t ms_pages_default;
     mode_sense_pages_t ms_pages_changeable;
+
+    /*
+       Waiting for a background host read before the data-in phase:
+       0 = no, 1 = next blocks (scsi_cdrom_read), 2 = first blocks of a READ.
+     */
+    int                host_wait;
 } scsi_cdrom_t;
 #endif
 
