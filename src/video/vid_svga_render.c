@@ -743,6 +743,8 @@ svga_render_2bpp_headland_highres(svga_t *svga)
     }
 }
 
+#include <inttypes.h>
+
 static void
 svga_render_indexed_gfx(svga_t *svga, bool highres, bool combine8bits)
 {
@@ -821,6 +823,8 @@ svga_render_indexed_gfx(svga_t *svga, bool highres, bool combine8bits)
     if (!(svga->changedvram[changed_offset] || svga->changedvram[changed_offset + 1] || svga->fullchange))
         return;
     p = &svga->monitor->target_buffer->line[svga->displine + svga->y_add][svga->x_add];
+    if (p < svga->monitor->target_buffer->line[0])
+        return;
 
     if (svga->render_line_offset) {
         if (svga->render_line_offset > 0) {
@@ -1577,13 +1581,14 @@ svga_render_15bpp_lowres(svga_t *svga)
                 for (x = 0; x <= (svga->hdisp + svga->scrollcache); x += 4) {
                     dat = *(uint32_t *) (&svga->vram[(svga->memaddr + (x << 1)) & svga->vram_display_mask]);
 
-                    *p++ = svga->conv_16to32(svga, dat & 0xffff, 15);
-                    *p++ = svga->conv_16to32(svga, dat >> 16, 15);
+                    p[0] = p[1] = svga->conv_16to32(svga, dat & 0xffff, 15);
+                    p[2] = p[3] = svga->conv_16to32(svga, dat >> 16, 15);
 
                     dat = *(uint32_t *) (&svga->vram[(svga->memaddr + (x << 1) + 4) & svga->vram_display_mask]);
 
-                    *p++ = svga->conv_16to32(svga, dat & 0xffff, 15);
-                    *p++ = svga->conv_16to32(svga, dat >> 16, 15);
+                    p[4] = p[5] = svga->conv_16to32(svga, dat & 0xffff, 15);
+                    p[6] = p[7] = svga->conv_16to32(svga, dat >> 16, 15);
+                    p += 8;
                 }
                 svga->memaddr += x << 1;
             } else {
@@ -1591,8 +1596,9 @@ svga_render_15bpp_lowres(svga_t *svga)
                     addr = svga->remap_func(svga, svga->memaddr);
                     dat  = *(uint32_t *) (&svga->vram[addr & svga->vram_display_mask]);
 
-                    *p++ = svga->conv_16to32(svga, dat & 0xffff, 15);
-                    *p++ = svga->conv_16to32(svga, dat >> 16, 15);
+                    p[0] = p[1] = svga->conv_16to32(svga, dat & 0xffff, 15);
+                    p[2] = p[3] = svga->conv_16to32(svga, dat >> 16, 15);
+                    p += 4;
                     svga->memaddr += 4;
                 }
             }
@@ -1817,13 +1823,14 @@ svga_render_16bpp_lowres(svga_t *svga)
                 for (x = 0; x <= (svga->hdisp + svga->scrollcache); x += 4) {
                     dat = *(uint32_t *) (&svga->vram[(svga->memaddr + (x << 1)) & svga->vram_display_mask]);
 
-                    *p++ = svga->conv_16to32(svga, dat & 0xffff, 16);
-                    *p++ = svga->conv_16to32(svga, dat >> 16, 16);
+                    p[0] = p[1] = svga->conv_16to32(svga, dat & 0xffff, 16);
+                    p[2] = p[3] = svga->conv_16to32(svga, dat >> 16, 16);
 
                     dat = *(uint32_t *) (&svga->vram[(svga->memaddr + (x << 1) + 4) & svga->vram_display_mask]);
 
-                    *p++ = svga->conv_16to32(svga, dat & 0xffff, 16);
-                    *p++ = svga->conv_16to32(svga, dat >> 16, 16);
+                    p[4] = p[5] = svga->conv_16to32(svga, dat & 0xffff, 16);
+                    p[6] = p[7] = svga->conv_16to32(svga, dat >> 16, 16);
+                    p += 8;
                 }
                 svga->memaddr += x << 1;
             } else {
@@ -1831,10 +1838,11 @@ svga_render_16bpp_lowres(svga_t *svga)
                     addr = svga->remap_func(svga, svga->memaddr);
                     dat  = *(uint32_t *) (&svga->vram[addr & svga->vram_display_mask]);
 
-                    *p++ = svga->conv_16to32(svga, dat & 0xffff, 16);
-                    *p++ = svga->conv_16to32(svga, dat >> 16, 16);
+                    p[0] = p[1] = svga->conv_16to32(svga, dat & 0xffff, 16);
+                    p[2] = p[3] = svga->conv_16to32(svga, dat >> 16, 16);
+                    p += 4;
+                    svga->memaddr += 4;
                 }
-                svga->memaddr += 4;
             }
             svga->memaddr &= svga->vram_display_mask;
         }
@@ -1972,7 +1980,7 @@ svga_render_24bpp_lowres(svga_t *svga)
             svga->lastline_draw = svga->displine;
 
             if (!svga->remap_required) {
-                for (x = 0; x <= (svga->hdisp + svga->scrollcache); x++) {
+                for (x = 0; x <= (svga->hdisp + svga->scrollcache); x += 4) {
                     dat0 = *(uint32_t *) (&svga->vram[svga->memaddr & svga->vram_display_mask]);
                     dat1 = *(uint32_t *) (&svga->vram[(svga->memaddr + 4) & svga->vram_display_mask]);
                     dat2 = *(uint32_t *) (&svga->vram[(svga->memaddr + 8) & svga->vram_display_mask]);
@@ -1981,6 +1989,7 @@ svga_render_24bpp_lowres(svga_t *svga)
                     p[2] = p[3] = lookup_lut((dat0 >> 24) | ((dat1 & 0xffff) << 8));
                     p[4] = p[5] = lookup_lut((dat1 >> 16) | ((dat2 & 0xff) << 16));
                     p[6] = p[7] = lookup_lut(dat2 >> 8);
+                    p += 8;
 
                     svga->memaddr += 12;
                 }
@@ -1997,6 +2006,7 @@ svga_render_24bpp_lowres(svga_t *svga)
                     p[2] = p[3] = lookup_lut((dat0 >> 24) | ((dat1 & 0xffff) << 8));
                     p[4] = p[5] = lookup_lut((dat1 >> 16) | ((dat2 & 0xff) << 16));
                     p[6] = p[7] = lookup_lut(dat2 >> 8);
+                    p += 8;
 
                     svga->memaddr += 12;
                 }

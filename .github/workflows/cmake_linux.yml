@@ -13,7 +13,6 @@ env:
   CMAKE_FLAGS: >-
     -D QT=OFF
     -D USE_SDL_SHADER=ON
-    -D NEW_DYNAREC=ON
     -D FLOPPY_CONTROL_SOCKET=ON
     -D GPIO=ON
   ASSETS_REPOSITORY: https://github.com/86Box/assets.git
@@ -124,7 +123,6 @@ jobs:
           --preset=regular
           -D QT=OFF
           -D USE_SDL_SHADER=ON
-          -D NEW_DYNAREC=ON
           -D FLOPPY_CONTROL_SOCKET=ON
           -D GPIO=ON
           -D BUILD_TYPE=release

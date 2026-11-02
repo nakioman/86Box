@@ -223,6 +223,15 @@ hercules_write(uint32_t addr, uint8_t val, void *priv)
     hercules_waitstates(dev);
 }
 
+/* For the memory viewer: no wait states. */
+static uint8_t *
+hercules_debug_ptr(uint32_t addr, UNUSED(int write), void *priv)
+{
+    hercules_t *dev = (hercules_t *) priv;
+
+    return &dev->vram[addr & ((dev->ctrl2 & 0x01) ? 0xffff : 0x0fff)];
+}
+
 static uint8_t
 hercules_read(uint32_t addr, void *priv)
 {
@@ -575,6 +584,7 @@ hercules_init(UNUSED(const device_t *info))
                     hercules_write, NULL, NULL,
                     NULL /*dev->vram*/, MEM_MAPPING_EXTERNAL,
                     dev);
+    mem_debug_add(hercules_read, hercules_write, hercules_debug_ptr);
 
     io_sethandler(0x03b0, 0x0010,
                   hercules_in, NULL, NULL,
@@ -613,10 +623,12 @@ hercules_init(UNUSED(const device_t *info))
 
     video_inform(VIDEO_FLAG_TYPE_MDA, &timing_hercules);
 
-    /* Force the LPT3 port to be enabled. */
-    dev->lpt = device_add_inst(&lpt_port_device, -1);
-    lpt_port_setup(dev->lpt, LPT_MDA_ADDR);
-    lpt_set_3bc_used(1);
+    if (!lpt_get_3bc_used()) {
+        /* Force the LPT3 port to be enabled. */
+        dev->lpt = device_add_inst(&lpt_port_device, -1);
+        lpt_port_setup(dev->lpt, LPT_MDA_ADDR);
+        lpt_set_3bc_used(1);
+    }
 
     return dev;
 }

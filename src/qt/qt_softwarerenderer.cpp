@@ -22,6 +22,8 @@
 #include <QResizeEvent>
 #include <QScreen>
 #include <QTimer>
+#include <algorithm>
+#include <cstring>
 #include "qt_util.hpp"
 #include "qt_osd.hpp"
 
@@ -48,13 +50,13 @@ SoftwareRenderer::SoftwareRenderer(QWidget *parent)
     /* The OSD animates and reacts to input even when the machine is paused, so
      * keep refreshing while it is on screen. */
     connect(new QTimer(this), &QTimer::timeout, this, [this]() {
-        if (dopause && qt_osd_is_visible())
+        if (dopause && qt_osd_needs_render())
             this->render();
 
-        if (!qt_osd_is_visible() && was_osd_visible)
+        if (!qt_osd_needs_render() && was_osd_visible)
             this->render();
 
-        was_osd_visible = qt_osd_is_visible();
+        was_osd_visible = qt_osd_needs_render();
     });
 }
 
@@ -105,16 +107,43 @@ SoftwareRenderer::onBlit(int buf_idx, int x, int y, int w, int h)
     if ((void *) tval == nullptr)
         return;
     auto origSource = source;
+    int  prev_image = cur_image;
 
     cur_image = buf_idx;
-    buf_usage[buf_idx ^ 1].clear();
-
     source.setRect(x, y, w, h);
+
+    /* Only repaint the rows that changed since the last frame, which the other
+       buffer still holds until it is released below. Every frame is blitted
+       whether or not anything changed, and sending all of it to a remote X
+       display can queue up enough to put the picture a second behind. */
+    int top    = 0;
+    int bottom = h;
+    if ((source == origSource) && (prev_image != -1) && (prev_image != buf_idx)) {
+        const QImage &cur  = *images[buf_idx];
+        const QImage &last = *images[prev_image];
+        auto          same = [&](int row) {
+            return !memcmp(cur.constScanLine(y + row) + (x * 4), last.constScanLine(y + row) + (x * 4), w * 4);
+        };
+        while ((top < h) && same(top))
+            top++;
+        while ((bottom > top) && same(bottom - 1))
+            bottom--;
+    }
+    buf_usage[buf_idx ^ 1].clear();
 
     if (source != origSource)
         onResize(this->width(), this->height());
 
-    update();
+    if ((top == 0) && (bottom == h)) {
+        update();
+    } else if (top < bottom) {
+        /* Filtering blends each row into its neighbours, so take a row more on either side. */
+        top         = std::max(top - 1, 0);
+        bottom      = std::min(bottom + 1, h);
+        int dtop    = destination.y() + ((top * destination.height()) / h) - 1;
+        int dbottom = destination.y() + (((bottom * destination.height()) + h - 1) / h) + 1;
+        update(QRect(destination.x(), dtop, destination.width(), dbottom - dtop));
+    }
 
     if (monitors[r_monitor_index].mon_screenshots) {
         char path[1024];
@@ -186,7 +215,7 @@ SoftwareRenderer::event(QEvent *event)
 void
 SoftwareRenderer::onPaint(QPaintDevice *device)
 {
-    const bool osd = qt_osd_is_visible();
+    const bool osd = qt_osd_needs_render();
     /* Repaint when the OSD is up, or once more right after it closes so a
      * lingering overlay is cleared even while the machine is paused. */
     if (cur_image == -1 && !osd && !osd_drawn_last)
@@ -217,7 +246,7 @@ SoftwareRenderer::onPaint(QPaintDevice *device)
 
     /* The OSD animates and reacts to input even when the machine is paused, so
      * keep refreshing while it is on screen. */
-    if (qt_osd_is_visible() && !dopause)
+    if (qt_osd_needs_render() && !dopause)
         QTimer::singleShot(16, this, [this] { update(); });
 }
 

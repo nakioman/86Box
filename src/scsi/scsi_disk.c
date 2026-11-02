@@ -56,6 +56,7 @@ const uint8_t scsi_disk_command_flags[0x100] = {
     [0x0a ... 0x0b] = IMPLEMENTED | CHECK_READY,
     [0x12]          = IMPLEMENTED | ALLOW_UA,
     [0x13]          = IMPLEMENTED | CHECK_READY | SCSI_ONLY,
+    [0x1b]          = IMPLEMENTED | CHECK_READY | SCSI_ONLY,
     [0x15]          = IMPLEMENTED,
     [0x16 ... 0x17] = IMPLEMENTED | SCSI_ONLY,
     [0x1a]          = IMPLEMENTED,
@@ -1030,6 +1031,11 @@ scsi_disk_command(scsi_common_t *sc, const uint8_t *cdb)
         case GPCMD_SCSI_RELEASE:
         case GPCMD_TEST_UNIT_READY:
         case GPCMD_FORMAT_UNIT:
+        /* A hard disk here is spinning from the moment it exists, so
+           START STOP UNIT has nothing to do but succeed. Firmware that
+           sends it -- the Adaptec 1.x BIOSes do, before the boot -- and
+           was told ILLEGAL REQUEST gave up on the drive. */
+        case GPCMD_START_STOP_UNIT:
             scsi_disk_set_phase(dev, SCSI_PHASE_STATUS);
             scsi_disk_command_complete(dev);
             break;
@@ -1138,7 +1144,7 @@ scsi_disk_command(scsi_common_t *sc, const uint8_t *cdb)
                     scsi_disk_data_command_finish(dev, alloc_length, 512,
                                                   alloc_length, 0);
 
-                    ui_sb_update_icon(SB_HDD, dev->packet_status != PHASE_COMPLETE);
+                    ui_sb_update_icon(SB_HDD | dev->drv->bus_type, dev->packet_status != PHASE_COMPLETE);
                 } else {
                     scsi_disk_set_phase(dev, SCSI_PHASE_STATUS);
                     dev->packet_status = (ret < 0) ? PHASE_ERROR : PHASE_COMPLETE;
@@ -1439,12 +1445,13 @@ scsi_disk_command(scsi_common_t *sc, const uint8_t *cdb)
                 }
                 dev->temp_buffer[7] |= 0x02;
 
-                if (dev->drv->model) {
+                if (dev->drv->model || dev->drv->vendor || dev->drv->version) {
                     /* Vendor */
                     ide_padstr8(dev->temp_buffer + 8, 8,
                                 (dev->drv->vendor) ? dev->drv->vendor : EMU_NAME);
                     /* Product */
-                    ide_padstr8(dev->temp_buffer + 16, 16, dev->drv->model);
+                    ide_padstr8(dev->temp_buffer + 16, 16,
+                                (dev->drv->model) ? dev->drv->model : device_identify);
                     /* Revision */
                     ide_padstr8(dev->temp_buffer + 32, 4,
                                 (dev->drv->version) ? dev->drv->version : EMU_VERSION_EX);
@@ -1703,7 +1710,7 @@ scsi_disk_get_max(UNUSED(const ide_t *ide), int ide_has_dma, const int type)
             ret = ide_has_dma ? 2 : -1;
             break;
         case TYPE_UDMA:
-            ret = ide_has_dma ? 5 : -1;
+            ret = ide_has_dma ? 6 : -1;
             break;
         default:
             ret = -1;
@@ -1754,11 +1761,12 @@ scsi_disk_identify(const ide_t *ide, const int ide_has_dma)
     ide_padstr((char *) (ide->buffer + 10), "", 20);               /* Serial Number */
 
     memset(model, 0, 40);
-    if (dev->drv->model) {
+    if (dev->drv->model || dev->drv->vendor || dev->drv->version) {
+        const char *drive_model = dev->drv->model ? dev->drv->model : device_identify;
         if (dev->drv->vendor)
-            snprintf(model, 40, "%s %s", dev->drv->vendor, dev->drv->model);
+            snprintf(model, 40, "%s %s", dev->drv->vendor, drive_model);
         else
-            snprintf(model, 40, "%s", dev->drv->model);
+            snprintf(model, 40, "%s", drive_model);
         ide_padstr((char *) (ide->buffer + 23),
                    (dev->drv->version) ? dev->drv->version : EMU_VERSION_EX, 8);    /* Firmware */
         ide_padstr((char *) (ide->buffer + 27), model, 40);                         /* Model */

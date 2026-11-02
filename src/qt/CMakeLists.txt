@@ -81,6 +81,22 @@ else()
     include_directories(${Qt5Gui_PRIVATE_INCLUDE_DIRS})
 endif()
 
+# The MSYS2 static Qt 6 finds its third-party libraries through CMake
+# modules that don't know about their static dependencies, so append
+# those to the imported targets to keep them after the library itself
+# on the link line.
+if(QT_STATIC AND MINGW AND USE_QT6)
+    find_package(PkgConfig REQUIRED)
+    if(TARGET TIFF::TIFF)
+        pkg_check_modules(LIBTIFF libtiff-4)
+        set_property(TARGET TIFF::TIFF APPEND PROPERTY INTERFACE_LINK_LIBRARIES ${LIBTIFF_STATIC_LIBRARIES})
+    endif()
+    if(TARGET OpenSSL::Crypto)
+        pkg_check_modules(LIBCRYPTO libcrypto)
+        set_property(TARGET OpenSSL::Crypto APPEND PROPERTY INTERFACE_LINK_LIBRARIES ${LIBCRYPTO_STATIC_LIBRARIES})
+    endif()
+endif()
+
 # TODO: Is this the correct way to do this, and is it required on any
 # other platforms or with Qt 5?
 if(APPLE AND USE_QT6 AND VCPKG_TOOLCHAIN)
@@ -139,10 +155,16 @@ add_library(ui STATIC
     qt_about.cpp
     qt_about.hpp
 
+    qt_pageddialog.cpp
+    qt_pageddialog.hpp
+    qt_pageddialog.ui
+
     qt_preferences.cpp
     qt_preferences.hpp
-    qt_preferences.ui
 
+    qt_preferencesgeneral.cpp
+    qt_preferencesgeneral.hpp
+    qt_preferencesgeneral.ui
     qt_preferencesemulator.cpp
     qt_preferencesemulator.hpp
     qt_preferencesemulator.ui
@@ -152,10 +174,12 @@ add_library(ui STATIC
     qt_preferenceskeybindings.cpp
     qt_preferenceskeybindings.hpp
     qt_preferenceskeybindings.ui
+    qt_preferencesmanager.cpp
+    qt_preferencesmanager.hpp
+    qt_preferencesmanager.ui
 
     qt_settings.cpp
     qt_settings.hpp
-    qt_settings.ui
 
     qt_settingsmachine.cpp
     qt_settingsmachine.hpp
@@ -244,6 +268,11 @@ add_library(ui STATIC
     qt_mcadevicelist.cpp
     qt_mcadevicelist.ui
 
+    qt_memoryviewer.hpp
+    qt_memoryviewer.cpp
+    qt_disasm.hpp
+    qt_disasm.cpp
+
     qt_mediahistorymanager.cpp
     qt_mediahistorymanager.hpp
 
@@ -266,9 +295,6 @@ add_library(ui STATIC
     qt_vmmanager_detailsection.ui
     qt_vmmanager_listviewdelegate.hpp
     qt_vmmanager_listviewdelegate.cpp
-    qt_vmmanager_preferences.cpp
-    qt_vmmanager_preferences.hpp
-    qt_vmmanager_preferences.ui
     qt_vmmanager_main.hpp
     qt_vmmanager_main.cpp
     qt_vmmanager_main.ui
@@ -312,15 +338,29 @@ add_library(ui STATIC
 
 # Build the Qt ImGui backend separately so AUTOMOC skips it.
 set(OSD_DIR ${CMAKE_SOURCE_DIR}/src/osd)
+
+find_path(Vulkan_INCLUDE_DIRS NAMES vulkan/vulkan.h)
+if(NOT Vulkan_INCLUDE_DIRS)
+    message(FATAL_ERROR "Vulkan headers (vulkan/vulkan.h) not found")
+endif()
+
 add_library(osd_backend OBJECT ${OSD_DIR}/imgui/imgui_impl_opengl3.cpp ${OSD_DIR}/imgui/imgui_impl_vulkan.cpp)
 set_target_properties(osd_backend PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
-target_include_directories(osd_backend PRIVATE ${OSD_DIR}/imgui)
+target_include_directories(osd_backend PRIVATE ${OSD_DIR}/imgui ${Vulkan_INCLUDE_DIRS})
 target_link_libraries(86Box osd_backend)
+
+# The memory viewer's disassembler, Zydis, from its copy in zydis/.
+if(DISASM)
+    add_subdirectory(zydis)
+    target_compile_definitions(ui PRIVATE USE_DISASM)
+    target_link_libraries(ui PRIVATE zydis)
+endif()
 
 target_sources(ui PRIVATE qt_osd.cpp qt_osd.hpp qt_osd_raster.cpp qt_osd_raster.hpp)
 target_include_directories(ui PRIVATE ${OSD_DIR} ${OSD_DIR}/imgui)
 
 if(EMU_BUILD_NUM)
+    add_compile_definitions(UPDATE_CHECK)
     target_sources(ui PRIVATE
         qt_updatecheck.cpp
         qt_updatecheck.hpp
@@ -330,6 +370,15 @@ if(EMU_BUILD_NUM)
         qt_updatedetails.cpp
         qt_updatedetails.hpp
         qt_updatedetails.ui
+    )
+endif()
+
+if(DISCORD)
+    target_sources(ui PRIVATE
+        qt_vmmanager_discord.cpp
+        qt_vmmanager_discord.hpp
+        qt_vmmanager_discordclient.cpp
+        qt_vmmanager_discordclient.hpp
     )
 endif()
 
@@ -345,7 +394,8 @@ if(WIN32)
     enable_language(RC)
     target_sources(86Box PUBLIC 86Box-qt.rc)
     target_sources(plat PRIVATE win_dynld.c)
-    target_link_libraries(86Box dwmapi SetupAPI)
+    # winmm: qt_main.cpp sets the timer resolution with timeBeginPeriod; RtMidi used to bring it in.
+    target_link_libraries(86Box dwmapi SetupAPI winmm)
 
     # CMake 3.22 messed this up for clang/clang++
     # See https://gitlab.kitware.com/cmake/cmake/-/issues/22611
@@ -378,7 +428,7 @@ else()
         else()
             target_link_libraries(86Box ${SDL2_LIBRARIES})
         endif()
-        add_compile_definitions(-DUSE_SDL2_LIB=1)
+        add_compile_definitions(USE_SDL2_LIB=1)
     else()
         find_package(SDL3 REQUIRED)
         include_directories(${SDL3_INCLUDE_DIRS})
@@ -486,7 +536,13 @@ endif()
 if(WIN32)
     if(STATIC_BUILD)
         # needed for static builds
-        qt_import_plugins(plat INCLUDE Qt${QT_MAJOR}::QWindowsIntegrationPlugin Qt${QT_MAJOR}::QICOPlugin Qt${QT_MAJOR}::QWindowsVistaStylePlugin)
+        if(TARGET Qt${QT_MAJOR}::QModernWindowsStylePlugin)
+            # Qt 6.7 renamed the windowsvista style plugin
+            set(QT_WINDOWS_STYLE_PLUGIN Qt${QT_MAJOR}::QModernWindowsStylePlugin)
+        else()
+            set(QT_WINDOWS_STYLE_PLUGIN Qt${QT_MAJOR}::QWindowsVistaStylePlugin)
+        endif()
+        qt_import_plugins(plat INCLUDE Qt${QT_MAJOR}::QWindowsIntegrationPlugin Qt${QT_MAJOR}::QICOPlugin ${QT_WINDOWS_STYLE_PLUGIN})
     else()
         if(USE_QT6)
             install(CODE "
@@ -505,6 +561,15 @@ if(WIN32)
                         \"\${CMAKE_INSTALL_PREFIX_ABSOLUTE}/$<TARGET_FILE_NAME:86Box>\")
                 ")
             endif()
+        endif()
+
+        # The Qt plugins live in the vcpkg tree rather than next to the
+        # binary, so point Qt at them to make the build tree runnable
+        # without going through `cmake --install` first.
+        if(VCPKG_TOOLCHAIN)
+            file(GENERATE
+                OUTPUT "$<TARGET_FILE_DIR:86Box>/qt.conf"
+                CONTENT "[Paths]\nPlugins = ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}$<$<CONFIG:Debug>:/debug>/Qt${QT_MAJOR}/plugins\n")
         endif()
     endif()
 endif()
@@ -592,7 +657,7 @@ if (UNIX AND NOT APPLE AND NOT HAIKU)
     target_sources(ui PRIVATE evdev_keyboard.cpp xinput2_mouse.cpp)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(LIBEVDEV IMPORTED_TARGET libevdev)
-    if (LIBEVDEV_FOUND)
+    if (LIBEVDEV_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_compile_definitions(ui PRIVATE EVDEV_INPUT)
         target_link_libraries(ui PUBLIC PkgConfig::LIBEVDEV)
         target_sources(ui PRIVATE evdev_mouse.cpp)
@@ -614,27 +679,37 @@ if (UNIX AND NOT APPLE AND NOT HAIKU)
         endif()
     endif()
 
-    find_package(ECM NO_MODULE)
-    if (ECM_FOUND)
-        list(APPEND CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
-        find_package(Wayland COMPONENTS Client)
-        if (Wayland_FOUND)
-            target_link_libraries(ui PRIVATE Wayland::Client)
-            find_package(WaylandScanner REQUIRED)
-            if (WaylandScanner_FOUND)
-                set(WL_SOURCE_VAR)
-                ecm_add_wayland_client_protocol(WL_SOURCE_VAR PROTOCOL ${CMAKE_SOURCE_DIR}/wl_protocols/relative-pointer-unstable-v1.xml BASENAME relative-pointer-unstable-v1)
-                ecm_add_wayland_client_protocol(WL_SOURCE_VAR PROTOCOL ${CMAKE_SOURCE_DIR}/wl_protocols/pointer-constraints-unstable-v1.xml BASENAME pointer-constraints-unstable-v1)
-                ecm_add_wayland_client_protocol(WL_SOURCE_VAR PROTOCOL ${CMAKE_SOURCE_DIR}/wl_protocols/keyboard-shortcuts-inhibit-unstable-v1.xml BASENAME keyboard-shortcuts-inhibit-unstable-v1)
-                target_include_directories(ui PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${Qt${QT_MAJOR}Gui_PRIVATE_INCLUDE_DIRS})
-                target_sources(ui PRIVATE ${WL_SOURCE_VAR} wl_mouse.cpp)
-                if (XKBCOMMON_FOUND)
-                    target_sources(ui PRIVATE xkbcommon_wl_keyboard.cpp)
-                endif()
-                target_compile_definitions(ui PRIVATE WAYLAND)
-                set(QT_PRIVATE_HEADERS ON)
-            endif()
+    # Wayland client protocols. wayland-scanner and the wayland-client
+    # pkg-config file both ship with wayland itself.
+    pkg_check_modules(WAYLAND_CLIENT IMPORTED_TARGET wayland-client)
+    find_program(WAYLAND_SCANNER_EXECUTABLE NAMES wayland-scanner)
+    if (WAYLAND_CLIENT_FOUND AND WAYLAND_SCANNER_EXECUTABLE)
+        set(WL_SOURCE_VAR)
+        foreach(_wl_proto relative-pointer-unstable-v1
+                          pointer-constraints-unstable-v1
+                          keyboard-shortcuts-inhibit-unstable-v1)
+            set(_wl_xml ${CMAKE_SOURCE_DIR}/wl_protocols/${_wl_proto}.xml)
+            set(_wl_hdr ${CMAKE_CURRENT_BINARY_DIR}/wayland-${_wl_proto}-client-protocol.h)
+            set(_wl_src ${CMAKE_CURRENT_BINARY_DIR}/wayland-${_wl_proto}-protocol.c)
+            add_custom_command(OUTPUT ${_wl_hdr}
+                COMMAND ${WAYLAND_SCANNER_EXECUTABLE} client-header ${_wl_xml} ${_wl_hdr}
+                DEPENDS ${_wl_xml} VERBATIM)
+            add_custom_command(OUTPUT ${_wl_src}
+                COMMAND ${WAYLAND_SCANNER_EXECUTABLE} public-code ${_wl_xml} ${_wl_src}
+                DEPENDS ${_wl_xml} ${_wl_hdr} VERBATIM)
+            set_property(SOURCE ${_wl_hdr} ${_wl_src} PROPERTY SKIP_AUTOMOC ON)
+            list(APPEND WL_SOURCE_VAR ${_wl_hdr} ${_wl_src})
+        endforeach()
+        target_link_libraries(ui PRIVATE PkgConfig::WAYLAND_CLIENT)
+        target_include_directories(ui PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${Qt${QT_MAJOR}Gui_PRIVATE_INCLUDE_DIRS})
+        target_sources(ui PRIVATE ${WL_SOURCE_VAR} wl_mouse.cpp)
+        if (XKBCOMMON_FOUND)
+            target_sources(ui PRIVATE xkbcommon_wl_keyboard.cpp)
         endif()
+        target_compile_definitions(ui PRIVATE WAYLAND)
+        set(QT_PRIVATE_HEADERS ON)
+    else()
+        message(WARNING "Wayland client development files not found; Wayland mouse capture will be disabled.")
     endif()
 
     # Add private headers for Qt5 if required.

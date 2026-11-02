@@ -76,7 +76,7 @@ static const device_config_t ibmpc_config[] = {
         .selection      = { { 0 } },
         .bios           = {
             {
-                .name          = "5700671 (10/19/81)",
+                .name          = "IBM BIOS - Revision 5700671 (10/19/81)",
                 .internal_name = "ibm5150_5700671",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
@@ -85,7 +85,7 @@ static const device_config_t ibmpc_config[] = {
                 .files         = { "roms/machines/ibmpc/BIOS_IBM5150_19OCT81_5700671_U33.BIN", "" }
             },
             {
-                .name          = "5700051 (04/24/81)",
+                .name          = "IBM BIOS - Revision 5700051 (04/24/81)",
                 .internal_name = "ibm5150_5700051",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
@@ -96,7 +96,7 @@ static const device_config_t ibmpc_config[] = {
 
             // GLaBIOS for IBM PC
             {
-                .name          = "GLaBIOS 0.4.0 (8088)",
+                .name          = "GLaBIOS - Revision 0.4.0 (8088)",
                 .internal_name = "glabios_040_8088",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
@@ -105,7 +105,7 @@ static const device_config_t ibmpc_config[] = {
                 .files         = { "roms/machines/glabios/GLABIOS_0.4.0_8P.ROM", "" }
             },
             {
-                .name          = "GLaBIOS 0.4.0 (V20)",
+                .name          = "GLaBIOS - Revision 0.4.0 (V20)",
                 .internal_name = "glabios_040_v20",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
@@ -255,7 +255,7 @@ static const device_config_t ibmpc82_config[] = {
         .selection      = { { 0 } },
         .bios           = {
             {
-                .name          = "1501476 (10/27/82)",
+                .name          = "IBM BIOS - Revision 1501476 (10/27/82)",
                 .internal_name = "ibm5150_1501476",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
@@ -264,7 +264,7 @@ static const device_config_t ibmpc82_config[] = {
                 .files         = { "roms/machines/ibmpc82/BIOS_5150_27OCT82_1501476_U33.BIN", "" }
             },
             {
-                .name          = "5000024 (08/16/82)",
+                .name          = "IBM BIOS - Revision 5000024 (08/16/82)",
                 .internal_name = "ibm5150_5000024",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
@@ -275,7 +275,7 @@ static const device_config_t ibmpc82_config[] = {
 
             // GLaBIOS for IBM PC
             {
-                .name          = "GLaBIOS 0.4.0 (8088)",
+                .name          = "GLaBIOS - Revision 0.4.0 (8088)",
                 .internal_name = "glabios_040_8088",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
@@ -284,7 +284,7 @@ static const device_config_t ibmpc82_config[] = {
                 .files         = { "roms/machines/glabios/GLABIOS_0.4.0_8P.ROM", "" }
             },
             {
-                .name          = "GLaBIOS 0.4.0 (V20)",
+                .name          = "GLaBIOS - Revision 0.4.0 (V20)",
                 .internal_name = "glabios_040_v20",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
@@ -434,7 +434,7 @@ static const device_config_t ibmxt_config[] = {
         .selection      = { { 0 } },
         .bios           = {
             {
-                .name          = "1501512 (11/08/82)",
+                .name          = "IBM BIOS - Revision 1501512 (11/08/82)",
                 .internal_name = "ibm5160_1501512_5000027",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 2,
@@ -444,7 +444,7 @@ static const device_config_t ibmxt_config[] = {
                                    "roms/machines/ibmxt/BIOS_5160_08NOV82_U19_5000027.BIN", "" }
             },
             {
-                .name          = "1501512 (11/08/82) (Alt)",
+                .name          = "IBM BIOS - Revision 1501512 (11/08/82) (Alternate)",
                 .internal_name = "ibm5160_1501512_6359116",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 2,
@@ -454,7 +454,7 @@ static const device_config_t ibmxt_config[] = {
                                    "roms/machines/ibmxt/BIOS_5160_08NOV82_U19_6359116.BIN", "" }
             },
             {
-                .name          = "5000026 (08/16/82)",
+                .name          = "IBM BIOS - Revision 5000026 (08/16/82)",
                 .internal_name = "ibm5160_5000026_5000027",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 2,
@@ -466,7 +466,7 @@ static const device_config_t ibmxt_config[] = {
 
             // GLaBIOS for IBM XT
             {
-                .name          = "GLaBIOS 0.4.0 (8088)",
+                .name          = "GLaBIOS - Revision 0.4.0 (8088)",
                 .internal_name = "glabios_040_8088",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 2,
@@ -476,7 +476,7 @@ static const device_config_t ibmxt_config[] = {
                                    "roms/machines/ibmxt/BIOS_5160_08NOV82_U19_5000027.BIN", "" }
             },
             {
-                .name          = "GLaBIOS 0.4.0 (V20)",
+                .name          = "GLaBIOS - Revision 0.4.0 (V20)",
                 .internal_name = "glabios_040_v20",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 2,
@@ -623,28 +623,14 @@ machine_ibmxt_init(const machine_t *model)
 /* IBM XT (1982) with an Intel Inboard 386/PC accelerator card fitted in place of the stock
    8088 - same real BIOS ROM chips, same base XT platform, plus the Inboard's own wait-state/
    A20/ROM-shadow hardware. */
-/* The Inboard 386/PC deliberately gets its OWN BIOS list rather than sharing ibmxt_config,
-   because the 1982-dated 5160 ROMs are genuinely INCOMPATIBLE with this card and must not be
-   selectable here:
-
-   INBRDPC.SYS v1.1 (02/17/89) - the Inboard's own required DOS driver - hardcodes a 3-byte
-   reference signature at a fixed BIOS offset (F000:E05B) as part of its ROM-shadow self-
-   verification, and the 1982 ROMs do not contain that signature at that offset. This is a real
-   ROM-revision mismatch, not an emulation shortcoming: real Inboard installations from the 1989
-   driver era used a later ROM revision. Booting this machine on a 1982 ROM produces spurious POST
-   errors (301 among them), a visibly wrong-speed memory count (the 1982 ROM's memory test is
-   different code entirely), and cannot boot Windows 95 - it hangs at the splash screen.
-
-   Sharing ibmxt_config previously made that failure mode *silent and very hard to diagnose*: the
-   1986 ROM entries are not in the stock shared list, so a `bios = ibm5160_050986` line in a config
-   file was not a valid option, was ignored without any warning, and selection fell back to the
-   1982 default. Listing only the compatible revisions here makes the incompatible ones
-   unselectable by construction. */
+/* The Inboard 386/PC keeps its own BIOS list: the 1986 ROMs are not in ibmxt_config, and a
+   config file naming a BIOS the list lacks is ignored without warning and falls back to the
+   default. The 08NOV82 ROM runs INBRDPC.SYS and Windows 95, here and on a real 5160. */
 static const device_config_t ibmxt_inboard386_config[] = {
   // clang-format off
     {
         .name           = "bios",
-        .description    = "BIOS",
+        .description    = "BIOS Version",
         .type           = CONFIG_BIOS,
         .default_string = "ibm5160_050986",
         .default_int    = 0,
@@ -652,7 +638,7 @@ static const device_config_t ibmxt_inboard386_config[] = {
         .spinner        = { 0 },
         .bios           = {
             {
-                .name          = "1501512 (05/09/86)",
+                .name          = "IBM BIOS - Revision 1501512 (05/09/86)",
                 .internal_name = "ibm5160_050986",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 2,
@@ -662,7 +648,7 @@ static const device_config_t ibmxt_inboard386_config[] = {
                                    "roms/machines/ibmxt86/BIOS_5160_09MAY86_U19_62X0819_68X4370_27256_F000.BIN", "" }
             },
             {
-                .name          = "5000026 (01/10/86)",
+                .name          = "IBM BIOS - Revision 5000026 (01/10/86)",
                 .internal_name = "ibm5160_011086",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 2,
@@ -670,6 +656,16 @@ static const device_config_t ibmxt_inboard386_config[] = {
                 .size          = 65536,
                 .files         = { "roms/machines/ibmxt86/BIOS_5160_10JAN86_U18_62X0851_27256_F800.BIN",
                                    "roms/machines/ibmxt86/BIOS_5160_10JAN86_U19_62X0854_27256_F000.BIN", "" }
+            },
+            {
+                .name          = "IBM BIOS - Revision 1501512 (11/08/82)",
+                .internal_name = "ibm5160_1501512_5000027",
+                .bios_type     = BIOS_NORMAL,
+                .files_no      = 2,
+                .local         = 0,
+                .size          = 65536,
+                .files         = { "roms/machines/ibmxt/BIOS_5160_08NOV82_U18_1501512.BIN",
+                                   "roms/machines/ibmxt/BIOS_5160_08NOV82_U19_5000027.BIN", "" }
             },
             { .files_no = 0 }
         }
@@ -792,13 +788,6 @@ machine_ibmxt_inboard386_init(const machine_t *model)
 
     device_add(&inboard386_xt_device); /* The Inboard 386/PC accelerator card itself. */
 
-    /* Intek21 TK9901 ECP/EPP parallel card (slot 7, IRQ 7 on the real machine). Standard
-       (non-ECP/EPP) parallel port - was present in this project's own local fork but never
-       included in PR #7626 (this file wasn't fully ported - the function returned early). */
-    lpt_t *lpt = device_add_inst(&lpt_port_device, 1);
-    lpt_port_setup(lpt, LPT1_ADDR);
-    lpt_port_irq(lpt, LPT1_IRQ);
-
     return ret;
 }
 
@@ -865,7 +854,7 @@ static const device_config_t ibmxt86_config[] = {
         .selection      = { { 0 } },
         .bios           = {
             {
-                .name          = "1501512 (05/09/86)",
+                .name          = "IBM BIOS - Revision 1501512 (05/09/86)",
                 .internal_name = "ibm5160_050986",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 2,
@@ -875,7 +864,7 @@ static const device_config_t ibmxt86_config[] = {
                                    "roms/machines/ibmxt86/BIOS_5160_09MAY86_U19_62X0819_68X4370_27256_F000.BIN", "" }
             },
             {
-                .name          = "5000026 (01/10/86)",
+                .name          = "IBM BIOS - Revision 5000026 (01/10/86)",
                 .internal_name = "ibm5160_011086",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 2,
@@ -885,7 +874,7 @@ static const device_config_t ibmxt86_config[] = {
                                    "roms/machines/ibmxt86/BIOS_5160_10JAN86_U19_62X0854_27256_F000.BIN", "" }
             },
             {
-                .name          = "1501512 (01/10/86) (Alt)",
+                .name          = "IBM BIOS - Revision 1501512 (01/10/86) (Alternate)",
                 .internal_name = "ibm5160_011086_alt",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 2,
@@ -897,7 +886,7 @@ static const device_config_t ibmxt86_config[] = {
 
             // GLaBIOS for IBM XT
             {
-                .name          = "GLaBIOS 0.4.0 (8088)",
+                .name          = "GLaBIOS - Revision 0.4.0 (8088)",
                 .internal_name = "glabios_040_8088",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 2,
@@ -907,7 +896,7 @@ static const device_config_t ibmxt86_config[] = {
                                    "roms/machines/ibmxt86/BIOS_5160_09MAY86_U19_62X0819_68X4370_27256_F000.BIN", "" }
             },
             {
-                .name          = "GLaBIOS 0.4.0 (V20)",
+                .name          = "GLaBIOS - Revision 0.4.0 (V20)",
                 .internal_name = "glabios_040_v20",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 2,
@@ -1156,9 +1145,11 @@ machine_xt_compaq_portable_init(const machine_t *model)
     if (joystick_type[0])
         device_add(&gameport_200_device);
 
-    lpt_t *lpt = device_add_inst(&lpt_port_device, 1);
-    lpt_port_setup(lpt, LPT_MDA_ADDR);
-    lpt_set_3bc_used(1);
+    if (!lpt_get_3bc_used()) {
+        lpt_t *lpt = device_add_inst(&lpt_port_device, 1);
+        lpt_port_setup(lpt, LPT_MDA_ADDR);
+        lpt_set_3bc_used(1);
+    }
 
     return ret;
 }
@@ -1176,7 +1167,7 @@ static const device_config_t dtk_config[] = {
         .selection      = { { 0 } },
         .bios = {
             {
-                .name          = "2.39",
+                .name          = "DTK ERSO BIOS - Revision 2.39",
                 .internal_name = "dtk_239",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
@@ -1185,7 +1176,7 @@ static const device_config_t dtk_config[] = {
                 .files         = { "roms/machines/dtk/PIM-TB10-Z.BIN", ""}
             },
             {
-                .name          = "2.42",
+                .name          = "DTK ERSO BIOS - Revision 2.42",
                 .internal_name = "dtk",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
@@ -1385,22 +1376,22 @@ static const device_config_t pc500_config[] = {
         .selection      = { { 0 } },
         .bios           = {
             {
-                .name          = "3.30",
-                .internal_name = "pc500_330",
-                .bios_type     = BIOS_NORMAL,
-                .files_no      = 1,
-                .local         = 0,
-                .size          = 8192,
-                .files         = { "roms/machines/pc500/rom330.bin", "" }
-            },
-            {
-                .name          = "3.1",
+                .name          = "Multitech/Acer BIOS - Revision 3.1",
                 .internal_name = "pc500_310",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
                 .local         = 0,
                 .size          = 8192,
                 .files         = { "roms/machines/pc500/rom310.bin", "" }
+            },
+            {
+                .name          = "Multitech/Acer BIOS - Revision 3.30",
+                .internal_name = "pc500_330",
+                .bios_type     = BIOS_NORMAL,
+                .files_no      = 1,
+                .local         = 0,
+                .size          = 8192,
+                .files         = { "roms/machines/pc500/rom330.bin", "" }
             },
             { .files_no = 0 }
         }
@@ -1490,22 +1481,22 @@ static const device_config_t pc500plus_config[] = {
         .name       = "bios",
         .description    = "BIOS Version",
         .type           = CONFIG_BIOS,
-        .default_string = "pc500plus",
+        .default_string = "pc500plus_406",
         .default_int    = 0,
         .file_filter    = NULL,
         .spinner        = { 0 },
         .bios           = {
             {
-                .name          = "4.06",
-                .internal_name = "pc500plus_406",
+                .name          = "Multitech/Acer BIOS - Revision 4.03",
+                .internal_name = "pc500plus_403",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
                 .local         = 0,
                 .size          = 16384,
-                .files         = { "roms/machines/pc500/rom406.bin", "" }
+                .files         = { "roms/machines/pc500/rom403.bin", "" }
             },
             {
-                .name          = "4.04",
+                .name          = "Multitech/Acer BIOS - Revision 4.04",
                 .internal_name = "pc500plus",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
@@ -1514,13 +1505,13 @@ static const device_config_t pc500plus_config[] = {
                 .files         = { "roms/machines/pc500/rom404.bin", "" }
             },
             {
-                .name          = "4.03",
-                .internal_name = "pc500plus_403",
+                .name          = "Multitech/Acer BIOS - Revision 4.06",
+                .internal_name = "pc500plus_406",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
                 .local         = 0,
                 .size          = 16384,
-                .files         = { "roms/machines/pc500/rom403.bin", "" }
+                .files         = { "roms/machines/pc500/rom406.bin", "" }
             },
             { .files_no = 0 }
         },
@@ -1613,22 +1604,22 @@ static const device_config_t pc700_config[] = {
         .spinner        = { 0 },
         .bios           = {
             {
-                .name           = "3.30",
-                .internal_name  = "pc700",
-                .bios_type      = BIOS_NORMAL,
-                .files_no       = 1,
-                .local          = 0,
-                .size           = 8192,
-                .files          = { "roms/machines/pc700/multitech pc-700 3.30.bin", "" }
-            },
-            {
-                .name           = "3.1",
+                .name           = "Multitech/Acer BIOS - Revision 3.1",
                 .internal_name  = "pc700_31",
                 .bios_type      = BIOS_NORMAL,
                 .files_no       = 1,
                 .local          = 0,
                 .size           = 8192,
                 .files          = { "roms/machines/pc700/multitech pc-700 3.1.bin", "" }
+            },
+            {
+                .name           = "Multitech/Acer BIOS - Revision 3.30",
+                .internal_name  = "pc700",
+                .bios_type      = BIOS_NORMAL,
+                .files_no       = 1,
+                .local          = 0,
+                .size           = 8192,
+                .files          = { "roms/machines/pc700/multitech pc-700 3.30.bin", "" }
             },
             { .files_no = 0 }
         },
@@ -1972,7 +1963,7 @@ static const device_config_t vendex_config[] = {
         .selection      = { { 0 } },
         .bios           = {
             {
-                .name          = "Bios 2.03C",
+                .name          = "Phoenix ROM BIOS - Revision 2.03C",
                 .internal_name = "vendex",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
@@ -1983,7 +1974,7 @@ static const device_config_t vendex_config[] = {
 
             // GLaBIOS for Vendex
             {
-                .name          = "GLaBIOS 0.4.0 (8088)",
+                .name          = "GLaBIOS - Revision 0.4.0 (8088)",
                 .internal_name = "glabios_040_8088",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
@@ -1992,7 +1983,7 @@ static const device_config_t vendex_config[] = {
                 .files         = { "roms/machines/glabios/GLABIOS_0.4.0_8TV.ROM", "" }
             },
             {
-                .name          = "GLaBIOS 0.4.0 (V20)",
+                .name          = "GLaBIOS - Revision 0.4.0 (V20)",
                 .internal_name = "glabios_040_v20",
                 .bios_type     = BIOS_NORMAL,
                 .files_no      = 1,
@@ -2291,9 +2282,11 @@ machine_xt_compaq_deskpro_init(const machine_t *model)
     nmi_init();
     standalone_gameport_type = &gameport_200_device;
 
-    lpt_t *lpt = device_add_inst(&lpt_port_device, 1);
-    lpt_port_setup(lpt, LPT_MDA_ADDR);
-    lpt_set_3bc_used(1);
+    if (!lpt_get_3bc_used()) {
+        lpt_t *lpt = device_add_inst(&lpt_port_device, 1);
+        lpt_port_setup(lpt, LPT_MDA_ADDR);
+        lpt_set_3bc_used(1);
+    }
 
     return ret;
 }

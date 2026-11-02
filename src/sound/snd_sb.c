@@ -165,6 +165,59 @@ static const uint8_t ess_4bit_xlat[] = {
 
 static double ess_att_6bits[64];
 
+static double ess_input_gain_vols_4bits[16];
+
+/*
+ * ES1938S Solo-1 playback-mixer curves (datasheet Table 22).
+ *
+ * The Solo-1 has separate gain curves for each audio source, so they have
+ * been separated out so as to not break existing AudioDrive mixers
+ *
+ * Entry 0 is mute and is handled explicitly by ess_solo1_4bit_gain().
+ */
+static const double ess_solo1_audio1_db[16] = {
+     0.0, -30.0, -27.0, -24.0, -21.0, -18.0, -15.0, -12.0,
+    -9.0,  -7.5,  -6.0,  -4.5,  -3.0,  -1.5,   0.0,   1.5
+};
+
+static const double ess_solo1_audio2_db[16] = {
+      0.0, -31.5, -28.5, -25.5, -22.5, -19.5, -16.5, -13.5,
+    -10.5,  -9.0,  -7.5,  -6.0,  -4.5,  -3.0,  -1.5,   0.0
+};
+
+static const double ess_solo1_music_db[16] = {
+     0.0, -21.0, -18.0, -15.0, -12.0, -9.0, -6.0, -3.0,
+     0.0,   1.5,   3.0,   4.5,   6.0,  7.5,  9.0, 10.5
+};
+
+static const double ess_solo1_aux_db[16] = {
+      0.0, -28.5, -25.5, -22.5, -19.5, -16.5, -13.5, -10.5,
+     -7.5,  -6.0,  -4.5,  -3.0,  -1.5,   0.0,   1.5,   3.0
+};
+
+static double
+ess_solo1_4bit_gain(const double table[16], uint8_t value)
+{
+    value &= 0x0f;
+    if (value == 0)
+        return 0.0;
+
+    return pow(10.0, table[value] / 20.0);
+}
+
+static double
+ess_solo1_master_gain(uint8_t value)
+{
+    double db;
+
+    /* Bit 6 is mute; bits 5:0 are 0.75 dB steps, 3Fh = 0 dB. */
+    if (value & 0x40)
+        return 0.0;
+
+    db = -47.25 + (0.75 * (double) (value & 0x3f));
+    return pow(10.0, db / 20.0);
+}
+
 static const uint16_t sb_mcv_addr[8]     = { 0x200, 0x210, 0x220, 0x230, 0x240, 0x250, 0x260, 0x270 };
 static const int      sb_pro_mcv_irqs[4] = { 7, 5, 3, 3 };
 
@@ -529,7 +582,7 @@ sb_get_buffer_sb16_awe32(int32_t *buffer, uint16_t len, void *priv)
             if (mixer->treble_r > 8)
                 out_r += (high_iir(0, 1, out_r) * bass_treble);
             else
-                out_r = (out_l *bass_treble + high_cut_iir(0, 1, out_r) * (1.0 - bass_treble));
+                out_r = (out_r *bass_treble + high_cut_iir(0, 1, out_r) * (1.0 - bass_treble));
         }
 
         buffer[c] += (int32_t) (out_l * mixer->output_gain_L);
@@ -537,6 +590,608 @@ sb_get_buffer_sb16_awe32(int32_t *buffer, uint16_t len, void *priv)
     }
 
     sb->dsp.pos = 0;
+}
+
+#define SB_RECORD_CLAMP(x) (((x) < -32768) ? -32768 : (((x) > 32767) ? 32767 : (x)))
+
+/* filter when sb_freq < capture rate */
+#define SB_RECORD_ANTIALIAS 1
+
+/* nyquist anti alias */
+#define SB_RECORD_AA_NYQ 0.9
+
+/* audio filter called on filter rate change */
+static void
+sb_record_aa_design(sb_dsp_t *dsp, int out_rate, int in_rate)
+{
+    const double fc    = (SB_RECORD_AA_NYQ * 0.5) * ((double) out_rate);
+    const double w0    = (2.0 * M_PI * fc) / ((double) in_rate);
+    const double cw    = cos(w0);
+    const double sw    = sin(w0);
+    const double alpha = sw / (2.0 * 0.70710678118654752);
+    const double a0    = 1.0 + alpha;
+
+    dsp->record_aa_b0_mic = ((1.0 - cw) / 2.0) / a0;
+    dsp->record_aa_b1_mic = (1.0 - cw) / a0;
+    dsp->record_aa_b2_mic = dsp->record_aa_b0_mic;
+    dsp->record_aa_a1_mic = (-2.0 * cw) / a0;
+    dsp->record_aa_a2_mic = (1.0 - alpha) / a0;
+}
+
+static double
+sb_record_aa_step(sb_dsp_t *dsp, int ch, double x)
+{
+    const double y = (dsp->record_aa_b0_mic * x) + dsp->record_aa_z1_mic[ch];
+
+    dsp->record_aa_z1_mic[ch] = (dsp->record_aa_b1_mic * x) - (dsp->record_aa_a1_mic * y)
+                                + dsp->record_aa_z2_mic[ch];
+    dsp->record_aa_z2_mic[ch] = (dsp->record_aa_b2_mic * x) - (dsp->record_aa_a2_mic * y);
+
+    return y;
+}
+
+static void
+ess_put_buffer_esx488(int16_t *buffer, int len, void *priv)
+{
+    sb_t                    *ess   = (sb_t *) priv;
+
+    /* divisor is rate capture device opened at*/
+    const int cap_rate = al_capture_get_rate();
+    const int denom    = (cap_rate > 0) ? cap_rate : SOUND_FREQ;
+    const int rate     = ess->dsp.sb_freq;
+
+    int c;
+    int gain;
+    int interp;
+    int filt;
+
+    /* sb_freq is 0 until the guest programs a rate  */
+    if (rate <= 0)
+        return;
+
+    if ((denom != ess->dsp.record_denom_mic) || (rate != ess->dsp.record_rate_mic)) {
+        ess->dsp.record_denom_mic      = denom;
+        ess->dsp.record_rate_mic       = rate;
+        ess->dsp.record_phase_mic      = 0;
+        ess->dsp.record_prev_l_mic     = 0;
+        ess->dsp.record_prev_r_mic     = 0;
+        ess->dsp.record_prev_valid_mic = 0;
+
+        ess->dsp.record_aa_z1_mic[0] = 0.0;
+        ess->dsp.record_aa_z1_mic[1] = 0.0;
+        ess->dsp.record_aa_z2_mic[0] = 0.0;
+        ess->dsp.record_aa_z2_mic[1] = 0.0;
+        ess->dsp.record_aa_active_mic = 0;
+
+#if SB_RECORD_ANTIALIAS
+        /* only when decimating */
+        if (rate < denom) {
+            sb_record_aa_design(&ess->dsp, rate, denom);
+            ess->dsp.record_aa_active_mic = 1;
+        }
+#endif
+    }
+
+    interp = (rate != denom);
+    filt   = ess->dsp.record_aa_active_mic;
+
+    gain = ess->dsp.ess_input_gain;
+
+    for (c = 0; c < len * 2; c += 2) {
+        const int32_t cap_l = (int32_t) buffer[c];
+        const int32_t cap_r = (int32_t) buffer[c + 1];
+
+        /* mic is the mono sum of line-in. truncating division for dc symmetry */
+        const int32_t mic = (cap_l + cap_r) / 2;
+
+        int32_t mix_l = mic;
+        int32_t mix_r = mic;
+        int32_t in_l;
+        int32_t in_r;
+
+        /* run on every input frame*/
+        if (filt) {
+            mix_l = (int32_t) lrint(sb_record_aa_step(&ess->dsp, 0, (double) mix_l));
+            mix_r = (int32_t) lrint(sb_record_aa_step(&ess->dsp, 1, (double) mix_r));
+        }
+
+        in_l = SB_RECORD_CLAMP(mix_l * ess_input_gain_vols_4bits[gain]);
+        in_r = SB_RECORD_CLAMP(mix_r * ess_input_gain_vols_4bits[gain]);
+
+        /* start new device change with first frame in interpolartor queue */
+        if (!ess->dsp.record_prev_valid_mic) {
+            ess->dsp.record_prev_l_mic     = in_l;
+            ess->dsp.record_prev_r_mic     = in_r;
+            ess->dsp.record_prev_valid_mic = 1;
+        }
+
+        /* phase ticks this forward, while-loop for new samples so they arent dropped */
+        ess->dsp.record_phase_mic += rate;
+        while (ess->dsp.record_phase_mic >= denom) {
+            int32_t out_l;
+            int32_t out_r;
+
+            ess->dsp.record_phase_mic -= denom; /* denom tracks input frame vs emitted frame , (rate - phase) / rate */
+
+            if (interp) {
+
+                const int32_t num = rate - ess->dsp.record_phase_mic;
+
+                out_l = ess->dsp.record_prev_l_mic
+                        + (int32_t) ((((int64_t) (in_l - ess->dsp.record_prev_l_mic)) * num) / rate);
+                out_r = ess->dsp.record_prev_r_mic
+                        + (int32_t) ((((int64_t) (in_r - ess->dsp.record_prev_r_mic)) * num) / rate);
+            } else {
+                out_l = in_l;
+                out_r = in_r;
+            }
+
+            ess->dsp.record_buffer[ess->dsp.record_pos_write_mic]                = (int16_t) out_l;
+            ess->dsp.record_buffer[(ess->dsp.record_pos_write_mic + 1) & 0xffff] = (int16_t) out_r;
+            ess->dsp.record_pos_write_mic = (ess->dsp.record_pos_write_mic + 2) & 0xffff;
+        }
+
+        ess->dsp.record_prev_l_mic = in_l;
+        ess->dsp.record_prev_r_mic = in_r;
+    }
+}
+
+void
+ess_put_buffer(int16_t *buffer, int len, void *priv)
+{
+    sb_t                    *ess   = (sb_t *) priv;
+    const ess_mixer_t       *mixer = &ess->mixer_ess;
+
+    /* divisor is rate capture device opened at*/
+    const int cap_rate = al_capture_get_rate();
+    const int denom    = (cap_rate > 0) ? cap_rate : SOUND_FREQ;
+    const int rate     = ess->dsp.sb_freq;
+
+    int c;
+    int gain_l;
+    int gain_r;
+    int sel_mic, sel_line;
+    int interp;
+    int filt;
+
+    /* sb_freq is 0 until the guest programs a rate  */
+    if (rate <= 0)
+        return;
+
+    if ((denom != ess->dsp.record_denom_mic) || (rate != ess->dsp.record_rate_mic)) {
+        ess->dsp.record_denom_mic      = denom;
+        ess->dsp.record_rate_mic       = rate;
+        ess->dsp.record_phase_mic      = 0;
+        ess->dsp.record_prev_l_mic     = 0;
+        ess->dsp.record_prev_r_mic     = 0;
+        ess->dsp.record_prev_valid_mic = 0;
+
+        ess->dsp.record_aa_z1_mic[0] = 0.0;
+        ess->dsp.record_aa_z1_mic[1] = 0.0;
+        ess->dsp.record_aa_z2_mic[0] = 0.0;
+        ess->dsp.record_aa_z2_mic[1] = 0.0;
+        ess->dsp.record_aa_active_mic = 0;
+
+#if SB_RECORD_ANTIALIAS
+        /* only when decimating */
+        if (rate < denom) {
+            sb_record_aa_design(&ess->dsp, rate, denom);
+            ess->dsp.record_aa_active_mic = 1;
+        }
+#endif
+    }
+
+    interp = (rate != denom);
+    filt   = ess->dsp.record_aa_active_mic;
+
+    gain_l = ess->dsp.ess_input_gain_l;
+    gain_r = ess->dsp.ess_input_gain_r;
+
+    sel_mic     = (mixer->input_selector == INPUT_MIC) != 0;
+    sel_line    = ((mixer->input_selector & INPUT_LINE_L) != 0) || ((mixer->input_selector & INPUT_MIXER_L) != 0);
+
+    for (c = 0; c < len * 2; c += 2) {
+        const int32_t cap_l = (int32_t) buffer[c];
+        const int32_t cap_r = (int32_t) buffer[c + 1];
+
+        /* mic is the mono sum of line-in. truncating division for dc symmetry */
+        const int32_t mic = (cap_l + cap_r) / 2;
+
+        int32_t mix_l = (mic * sel_mic) + (cap_l * sel_line);
+        int32_t mix_r = (mic * sel_mic) + (cap_r * sel_line);
+        int32_t in_l;
+        int32_t in_r;
+
+        /* run on every input frame*/
+        if (filt) {
+            mix_l = (int32_t) lrint(sb_record_aa_step(&ess->dsp, 0, (double) mix_l));
+            mix_r = (int32_t) lrint(sb_record_aa_step(&ess->dsp, 1, (double) mix_r));
+        }
+
+        in_l = SB_RECORD_CLAMP(mix_l * ess_input_gain_vols_4bits[gain_l]);
+        in_r = SB_RECORD_CLAMP(mix_r * ess_input_gain_vols_4bits[gain_r]);
+
+        /* start new device change with first frame in interpolartor queue */
+        if (!ess->dsp.record_prev_valid_mic) {
+            ess->dsp.record_prev_l_mic     = in_l;
+            ess->dsp.record_prev_r_mic     = in_r;
+            ess->dsp.record_prev_valid_mic = 1;
+        }
+
+        /* phase ticks this forward, while-loop for new samples so they arent dropped */
+        ess->dsp.record_phase_mic += rate;
+        while (ess->dsp.record_phase_mic >= denom) {
+            int32_t out_l;
+            int32_t out_r;
+
+            ess->dsp.record_phase_mic -= denom; /* denom tracks input frame vs emitted frame , (rate - phase) / rate */
+
+            if (interp) {
+
+                const int32_t num = rate - ess->dsp.record_phase_mic;
+
+                out_l = ess->dsp.record_prev_l_mic
+                        + (int32_t) ((((int64_t) (in_l - ess->dsp.record_prev_l_mic)) * num) / rate);
+                out_r = ess->dsp.record_prev_r_mic
+                        + (int32_t) ((((int64_t) (in_r - ess->dsp.record_prev_r_mic)) * num) / rate);
+            } else {
+                out_l = in_l;
+                out_r = in_r;
+            }
+
+            ess->dsp.record_buffer[ess->dsp.record_pos_write_mic]                = (int16_t) out_l;
+            ess->dsp.record_buffer[(ess->dsp.record_pos_write_mic + 1) & 0xffff] = (int16_t) out_r;
+
+            ess->dsp.record_pos_write_mic = (ess->dsp.record_pos_write_mic + 2) & 0xffff;
+        }
+
+        ess->dsp.record_prev_l_mic = in_l;
+        ess->dsp.record_prev_r_mic = in_r;
+    }
+}
+
+static void
+sb_put_buffer_sb(int16_t *buffer, int len, void *priv)
+{
+    sb_t                    *sb    = (sb_t *) priv;
+
+    /* divisor is rate capture device opened at*/
+    const int cap_rate = al_capture_get_rate();
+    const int denom    = (cap_rate > 0) ? cap_rate : SOUND_FREQ;
+    const int rate     = sb->dsp.sb_freq;
+
+    int c;
+    int interp;
+    int filt;
+
+    /* sb_freq is 0 until the guest programs a rate  */
+    if (rate <= 0)
+        return;
+
+    if ((denom != sb->dsp.record_denom_mic) || (rate != sb->dsp.record_rate_mic)) {
+        sb->dsp.record_denom_mic      = denom;
+        sb->dsp.record_rate_mic       = rate;
+        sb->dsp.record_phase_mic      = 0;
+        sb->dsp.record_prev_l_mic     = 0;
+        sb->dsp.record_prev_r_mic     = 0;
+        sb->dsp.record_prev_valid_mic = 0;
+
+        sb->dsp.record_aa_z1_mic[0] = 0.0;
+        sb->dsp.record_aa_z1_mic[1] = 0.0;
+        sb->dsp.record_aa_z2_mic[0] = 0.0;
+        sb->dsp.record_aa_z2_mic[1] = 0.0;
+        sb->dsp.record_aa_active_mic = 0;
+
+#if SB_RECORD_ANTIALIAS
+        /* only when decimating */
+        if (rate < denom) {
+            sb_record_aa_design(&sb->dsp, rate, denom);
+            sb->dsp.record_aa_active_mic = 1;
+        }
+#endif
+    }
+
+    interp = (rate != denom);
+    filt   = sb->dsp.record_aa_active_mic;
+
+    for (c = 0; c < len * 2; c += 2) {
+        const int32_t cap_l = (int32_t) buffer[c];
+        const int32_t cap_r = (int32_t) buffer[c + 1];
+
+        /* mic is the mono sum of line-in. truncating division for dc symmetry */
+        const int32_t mic = (cap_l + cap_r) / 2;
+
+        int32_t mix_l = mic;
+        int32_t mix_r = mic;
+        int32_t in_l;
+        int32_t in_r;
+
+        /* run on every input frame*/
+        if (filt) {
+            mix_l = (int32_t) lrint(sb_record_aa_step(&sb->dsp, 0, (double) mix_l));
+            mix_r = (int32_t) lrint(sb_record_aa_step(&sb->dsp, 1, (double) mix_r));
+        }
+
+        in_l = SB_RECORD_CLAMP(mix_l * 2);
+        in_r = SB_RECORD_CLAMP(mix_r * 2);
+
+        /* start new device change with first frame in interpolartor queue */
+        if (!sb->dsp.record_prev_valid_mic) {
+            sb->dsp.record_prev_l_mic     = in_l;
+            sb->dsp.record_prev_r_mic     = in_r;
+            sb->dsp.record_prev_valid_mic = 1;
+        }
+
+        /* phase ticks this forward, while-loop for new samples so they arent dropped */
+        sb->dsp.record_phase_mic += rate;
+        while (sb->dsp.record_phase_mic >= denom) {
+            int32_t out_l;
+            int32_t out_r;
+
+            sb->dsp.record_phase_mic -= denom; /* denom tracks input frame vs emitted frame , (rate - phase) / rate */
+
+            if (interp) {
+
+                const int32_t num = rate - sb->dsp.record_phase_mic;
+
+                out_l = sb->dsp.record_prev_l_mic
+                        + (int32_t) ((((int64_t) (in_l - sb->dsp.record_prev_l_mic)) * num) / rate);
+                out_r = sb->dsp.record_prev_r_mic
+                        + (int32_t) ((((int64_t) (in_r - sb->dsp.record_prev_r_mic)) * num) / rate);
+            } else {
+                out_l = in_l;
+                out_r = in_r;
+            }
+
+            sb->dsp.record_buffer[sb->dsp.record_pos_write_mic]                = (int16_t) out_l;
+            sb->dsp.record_buffer[(sb->dsp.record_pos_write_mic + 1) & 0xffff] = (int16_t) out_r;
+            sb->dsp.record_pos_write_mic = (sb->dsp.record_pos_write_mic + 2) & 0xffff;
+        }
+
+        sb->dsp.record_prev_l_mic = in_l;
+        sb->dsp.record_prev_r_mic = in_r;
+    }
+}
+
+void
+sb_put_buffer_sbpro(int16_t *buffer, int len, void *priv)
+{
+    sb_t                    *sb    = (sb_t *) priv;
+    const sb_ct1345_mixer_t *mixer = &sb->mixer_sbpro;
+
+    /* divisor is rate capture device opened at*/
+    const int cap_rate = al_capture_get_rate();
+    const int denom    = (cap_rate > 0) ? cap_rate : SOUND_FREQ;
+    const int rate     = sb->dsp.sb_freq;
+
+    int c;
+    int sel_mic, sel_line;
+    int interp;
+    int filt;
+
+    /* sb_freq is 0 until the guest programs a rate  */
+    if (rate <= 0)
+        return;
+
+    if ((denom != sb->dsp.record_denom_mic) || (rate != sb->dsp.record_rate_mic)) {
+        sb->dsp.record_denom_mic      = denom;
+        sb->dsp.record_rate_mic       = rate;
+        sb->dsp.record_phase_mic      = 0;
+        sb->dsp.record_prev_l_mic     = 0;
+        sb->dsp.record_prev_r_mic     = 0;
+        sb->dsp.record_prev_valid_mic = 0;
+
+        sb->dsp.record_aa_z1_mic[0] = 0.0;
+        sb->dsp.record_aa_z1_mic[1] = 0.0;
+        sb->dsp.record_aa_z2_mic[0] = 0.0;
+        sb->dsp.record_aa_z2_mic[1] = 0.0;
+        sb->dsp.record_aa_active_mic = 0;
+
+#if SB_RECORD_ANTIALIAS
+        /* only when decimating */
+        if (rate < denom) {
+            sb_record_aa_design(&sb->dsp, rate, denom);
+            sb->dsp.record_aa_active_mic = 1;
+        }
+#endif
+    }
+
+    interp = (rate != denom);
+    filt   = sb->dsp.record_aa_active_mic;
+
+    sel_mic   = (mixer->input_selector == INPUT_MIC) != 0;
+    sel_line  = (mixer->input_selector & INPUT_LINE_L) != 0;
+
+    for (c = 0; c < len * 2; c += 2) {
+        const int32_t cap_l = (int32_t) buffer[c];
+        const int32_t cap_r = (int32_t) buffer[c + 1];
+
+        /* mic is the mono sum of line-in. truncating division for dc symmetry */
+        const int32_t mic = (cap_l + cap_r) / 2;
+
+        int32_t mix_l = (mic * sel_mic) + (cap_l * sel_line);
+        int32_t mix_r = (mic * sel_mic) + (cap_r * sel_line);
+        int32_t in_l;
+        int32_t in_r;
+
+        /* run on every input frame*/
+        if (filt) {
+            mix_l = (int32_t) lrint(sb_record_aa_step(&sb->dsp, 0, (double) mix_l));
+            mix_r = (int32_t) lrint(sb_record_aa_step(&sb->dsp, 1, (double) mix_r));
+        }
+
+        in_l = SB_RECORD_CLAMP(mix_l * 2);
+        in_r = SB_RECORD_CLAMP(mix_r * 2);
+
+        /* start new device change with first frame in interpolartor queue */
+        if (!sb->dsp.record_prev_valid_mic) {
+            sb->dsp.record_prev_l_mic     = in_l;
+            sb->dsp.record_prev_r_mic     = in_r;
+            sb->dsp.record_prev_valid_mic = 1;
+        }
+
+        /* phase ticks this forward, while-loop for new samples so they arent dropped */
+        sb->dsp.record_phase_mic += rate;
+        while (sb->dsp.record_phase_mic >= denom) {
+            int32_t out_l;
+            int32_t out_r;
+
+            sb->dsp.record_phase_mic -= denom; /* denom tracks input frame vs emitted frame , (rate - phase) / rate */
+
+            if (interp) {
+
+                const int32_t num = rate - sb->dsp.record_phase_mic;
+
+                out_l = sb->dsp.record_prev_l_mic
+                        + (int32_t) ((((int64_t) (in_l - sb->dsp.record_prev_l_mic)) * num) / rate);
+                out_r = sb->dsp.record_prev_r_mic
+                        + (int32_t) ((((int64_t) (in_r - sb->dsp.record_prev_r_mic)) * num) / rate);
+            } else {
+                out_l = in_l;
+                out_r = in_r;
+            }
+
+            if (sb->dsp.stereoi) {
+                if (!sb->dsp.sbleftrighti) {
+                    sb->dsp.record_buffer[sb->dsp.record_pos_write_mic]                = (int16_t) out_l;
+                    sb->dsp.record_buffer[(sb->dsp.record_pos_write_mic + 1) & 0xffff] = (int16_t) out_r;
+                    sb->dsp.record_pos_write_mic = (sb->dsp.record_pos_write_mic + 2) & 0xffff;
+                } else {
+                    sb->dsp.record_buffer[sb->dsp.record_pos_write_mic]                = (int16_t) out_r;
+                    sb->dsp.record_buffer[(sb->dsp.record_pos_write_mic + 1) & 0xffff] = (int16_t) out_l;
+                    sb->dsp.record_pos_write_mic = (sb->dsp.record_pos_write_mic + 2) & 0xffff;
+                }
+                sb->dsp.sbleftrighti = !sb->dsp.sbleftrighti;
+            } else {
+                sb->dsp.record_buffer[sb->dsp.record_pos_write_mic]                = (int16_t) out_l;
+                sb->dsp.record_buffer[(sb->dsp.record_pos_write_mic + 1) & 0xffff] = (int16_t) out_r;
+                sb->dsp.record_pos_write_mic = (sb->dsp.record_pos_write_mic + 2) & 0xffff;
+            }
+        }
+
+        sb->dsp.record_prev_l_mic = in_l;
+        sb->dsp.record_prev_r_mic = in_r;
+    }
+}
+
+static void
+sb_put_buffer_sb16_awe32(int16_t *buffer, int len, void *priv)
+{
+    sb_t                    *sb    = (sb_t *) priv;
+    const sb_ct1745_mixer_t *mixer = &sb->mixer_sb16;
+
+    /* divisor is rate capture device opened at*/
+    const int cap_rate = al_capture_get_rate();
+    const int denom    = (cap_rate > 0) ? cap_rate : SOUND_FREQ;
+    const int rate     = sb->dsp.sb_freq;
+
+    int c;
+    int gain_l;
+    int gain_r;
+    int sel_l_mic, sel_l_linel, sel_l_liner;
+    int sel_r_mic, sel_r_linel, sel_r_liner;
+    int interp;
+    int filt;
+
+    /* sb_freq is 0 until the guest programs a rate  */
+    if (rate <= 0)
+        return;
+
+    if ((denom != sb->dsp.record_denom_mic) || (rate != sb->dsp.record_rate_mic)) {
+        sb->dsp.record_denom_mic      = denom;
+        sb->dsp.record_rate_mic       = rate;
+        sb->dsp.record_phase_mic      = 0;
+        sb->dsp.record_prev_l_mic     = 0;
+        sb->dsp.record_prev_r_mic     = 0;
+        sb->dsp.record_prev_valid_mic = 0;
+
+        sb->dsp.record_aa_z1_mic[0] = 0.0;
+        sb->dsp.record_aa_z1_mic[1] = 0.0;
+        sb->dsp.record_aa_z2_mic[0] = 0.0;
+        sb->dsp.record_aa_z2_mic[1] = 0.0;
+        sb->dsp.record_aa_active_mic = 0;
+
+#if SB_RECORD_ANTIALIAS
+        /* only when decimating */
+        if (rate < denom) {
+            sb_record_aa_design(&sb->dsp, rate, denom);
+            sb->dsp.record_aa_active_mic = 1;
+        }
+#endif
+    }
+
+    interp = (rate != denom);
+    filt   = sb->dsp.record_aa_active_mic;
+
+    gain_l = 1 << mixer->input_gain_L;
+    gain_r = 1 << mixer->input_gain_R;
+
+    sel_l_mic   = (mixer->input_selector_left & INPUT_MIC) != 0;
+    sel_l_linel = (mixer->input_selector_left & INPUT_LINE_L) != 0;
+    sel_l_liner = (mixer->input_selector_left & INPUT_LINE_R) != 0;
+
+    sel_r_mic   = (mixer->input_selector_right & INPUT_MIC) != 0;
+    sel_r_linel = (mixer->input_selector_right & INPUT_LINE_L) != 0;
+    sel_r_liner = (mixer->input_selector_right & INPUT_LINE_R) != 0;
+
+    for (c = 0; c < len * 2; c += 2) {
+        const int32_t cap_l = (int32_t) buffer[c];
+        const int32_t cap_r = (int32_t) buffer[c + 1];
+
+        /* mic is the mono sum of line-in. truncating division for dc symmetry */
+        const int32_t mic = (cap_l + cap_r) / 2;
+
+        int32_t mix_l = (mic * sel_l_mic) + (cap_l * sel_l_linel) + (cap_r * sel_l_liner);
+        int32_t mix_r = (mic * sel_r_mic) + (cap_l * sel_r_linel) + (cap_r * sel_r_liner);
+        int32_t in_l;
+        int32_t in_r;
+
+        /* run on every input frame*/
+        if (filt) {
+            mix_l = (int32_t) lrint(sb_record_aa_step(&sb->dsp, 0, (double) mix_l));
+            mix_r = (int32_t) lrint(sb_record_aa_step(&sb->dsp, 1, (double) mix_r));
+        }
+
+        in_l = SB_RECORD_CLAMP(mix_l * gain_l);
+        in_r = SB_RECORD_CLAMP(mix_r * gain_r);
+
+        /* start new device change with first frame in interpolartor queue */
+        if (!sb->dsp.record_prev_valid_mic) {
+            sb->dsp.record_prev_l_mic     = in_l;
+            sb->dsp.record_prev_r_mic     = in_r;
+            sb->dsp.record_prev_valid_mic = 1;
+        }
+
+        /* phase ticks this forward, while-loop for new samples so they arent dropped */
+        sb->dsp.record_phase_mic += rate;
+        while (sb->dsp.record_phase_mic >= denom) {
+            int32_t out_l;
+            int32_t out_r;
+
+            sb->dsp.record_phase_mic -= denom; /* denom tracks input frame vs emitted frame , (rate - phase) / rate */
+
+            if (interp) {
+                
+                const int32_t num = rate - sb->dsp.record_phase_mic;
+
+                out_l = sb->dsp.record_prev_l_mic
+                        + (int32_t) ((((int64_t) (in_l - sb->dsp.record_prev_l_mic)) * num) / rate);
+                out_r = sb->dsp.record_prev_r_mic
+                        + (int32_t) ((((int64_t) (in_r - sb->dsp.record_prev_r_mic)) * num) / rate);
+            } else {
+                out_l = in_l;
+                out_r = in_r;
+            }
+
+            sb->dsp.record_buffer[sb->dsp.record_pos_write_mic]                = (int16_t) out_l;
+            sb->dsp.record_buffer[(sb->dsp.record_pos_write_mic + 1) & 0xffff] = (int16_t) out_r;
+
+            sb->dsp.record_pos_write_mic = (sb->dsp.record_pos_write_mic + 2) & 0xffff;
+        }
+
+        sb->dsp.record_prev_l_mic = in_l;
+        sb->dsp.record_prev_r_mic = in_r;
+    }
 }
 
 static void
@@ -604,7 +1259,7 @@ sb_get_music_buffer_sb16_awe32(int32_t *buffer, const uint16_t len, void *priv)
             if (mixer->treble_r > 8)
                 out_r += (high_iir(1, 1, out_r) * bass_treble);
             else
-                out_r = (out_l *bass_treble + high_cut_iir(1, 1, out_r) * (1.0 - bass_treble));
+                out_r = (out_r *bass_treble + high_cut_iir(1, 1, out_r) * (1.0 - bass_treble));
         }
 
         if (sb->dsp.sb_enable_i) {
@@ -714,7 +1369,7 @@ sb_get_wavetable_buffer_sb16_awe32(int32_t *buffer, const uint16_t len, void *pr
             if (mixer->treble_r > 8)
                 out_r += (high_iir(4, 1, out_r) * bass_treble);
             else
-                out_r = (out_l *bass_treble + high_cut_iir(4, 1, out_r) * (1.0 - bass_treble));
+                out_r = (out_r *bass_treble + high_cut_iir(4, 1, out_r) * (1.0 - bass_treble));
         }
 
         buffer[c] += (int32_t) (out_l * mixer->output_gain_L);
@@ -1233,8 +1888,18 @@ sb_ct1345_mixer_write(uint16_t addr, uint8_t val, void *priv)
 
         mixer->mic = sb_att_7dbstep_2bits[(mixer->regs[0x0a] >> 1) & 0x3] / 32768.0;
 
-        mixer->output_filter  = !(mixer->regs[0xe] & 0x20);
-        mixer->input_filter   = !(mixer->regs[0xc] & 0x20);
+        switch (sb->mixer_quirks) {
+            case QUIRK_NOFILTER:
+                mixer->output_filter = mixer->input_filter = 0;
+                break;
+            case QUIRK_FILTERND:
+                mixer->output_filter = mixer->input_filter = 1;
+                break;
+            default:
+                mixer->output_filter  = !(mixer->regs[0xe] & 0x20);
+                mixer->input_filter   = !(mixer->regs[0xc] & 0x20);
+                break;
+        }
         mixer->in_filter_freq = ((mixer->regs[0xc] & 0x8) == 0) ? 3200 : 8800;
         mixer->stereo         = mixer->regs[0xe] & 2;
         if (mixer->index == 0xe)
@@ -1979,6 +2644,8 @@ ess_mixer_write(uint16_t addr, uint8_t val, void *priv)
                         mixer->input_selector = INPUT_CD_L | INPUT_CD_R;
                     } else if ((mixer->regs[0x1C] & 0x02) == 0) {
                         mixer->input_selector = INPUT_MIC;
+                    } else if ((mixer->regs[0x1C] & 0x07) == 0x04) {
+                        mixer->input_selector = INPUT_MIC;
                     }
                     break;
 
@@ -2357,6 +3024,81 @@ ess_mixer_write(uint16_t addr, uint8_t val, void *priv)
     }
 }
 
+static void
+ess_solo1_mixer_recalc(sb_t *ess)
+{
+    ess_mixer_t *mixer;
+
+    if (ess == NULL)
+        return;
+
+    mixer = &ess->mixer_ess;
+
+    mixer->voice_l = ess_solo1_4bit_gain(ess_solo1_audio1_db,
+                                          (mixer->regs[0x14] >> 4) & 0x0f);
+    mixer->voice_r = ess_solo1_4bit_gain(ess_solo1_audio1_db,
+                                          mixer->regs[0x14] & 0x0f);
+
+    mixer->fm_l = ess_solo1_4bit_gain(ess_solo1_music_db,
+                                       (mixer->regs[0x36] >> 4) & 0x0f);
+    mixer->fm_r = ess_solo1_4bit_gain(ess_solo1_music_db,
+                                       mixer->regs[0x36] & 0x0f);
+
+    mixer->cd_l = ess_solo1_4bit_gain(ess_solo1_aux_db,
+                                       (mixer->regs[0x38] >> 4) & 0x0f);
+    mixer->cd_r = ess_solo1_4bit_gain(ess_solo1_aux_db,
+                                       mixer->regs[0x38] & 0x0f);
+
+    mixer->dac2_l = ess_solo1_4bit_gain(ess_solo1_audio2_db,
+                                         (mixer->regs[0x7c] >> 4) & 0x0f);
+    mixer->dac2_r = ess_solo1_4bit_gain(ess_solo1_audio2_db,
+                                         mixer->regs[0x7c] & 0x0f);
+
+    mixer->master_l = ess_solo1_master_gain(mixer->regs[0x60]);
+    mixer->master_r = ess_solo1_master_gain(mixer->regs[0x62]);
+}
+
+static void
+ess_solo1_mixer_set_reset_defaults(sb_t *ess)
+{
+    ess_mixer_t *mixer;
+
+    if (ess == NULL)
+        return;
+
+    mixer = &ess->mixer_ess;
+
+    mixer->regs[0x14] = 0x88; /* Audio 1 play volume. */
+    mixer->regs[0x32] = 0x88; /* Backward-compatible master volume. */
+    mixer->regs[0x36] = 0x88; /* Music DAC / ESFM volume. */
+    mixer->regs[0x38] = 0x00; /* AuxA / CD muted at reset. */
+    mixer->regs[0x3a] = 0x00;
+    mixer->regs[0x3c] = 0x04;
+    mixer->regs[0x3e] = 0x00;
+    mixer->regs[0x60] = 0x36; /* Actual left master hardware volume. */
+    mixer->regs[0x62] = 0x36; /* Actual right master hardware volume. */
+    mixer->regs[0x64] = 0x00; /* SB Pro master-volume emulation enabled. */
+    mixer->regs[0x7c] = 0x00; /* Audio 2 playback muted at reset. */
+}
+
+static void
+ess_solo1_mixer_write(uint16_t addr, uint8_t val, void *priv)
+{
+    sb_t *ess = (sb_t *) priv;
+    int   mixer_reset = 0;
+
+    if (ess != NULL && (addr & 1) && ess->mixer_ess.index == 0x00)
+        mixer_reset = 1;
+
+    ess_mixer_write(addr, val, priv);
+
+    if (ess != NULL && (addr & 1)) {
+        if (mixer_reset)
+            ess_solo1_mixer_set_reset_defaults(ess);
+        ess_solo1_mixer_recalc(ess);
+    }
+}
+
 uint8_t
 ess_mixer_read(uint16_t addr, void *priv)
 {
@@ -2555,6 +3297,15 @@ ess_mixer_reset(sb_t *ess)
 {
     ess_mixer_write(4, 0, ess);
     ess_mixer_write(5, 0, ess);
+}
+
+static void
+ess_solo1_mixer_reset(sb_t *ess)
+{
+    /* Preserve all generic reset side effects, then impose Solo-1 reset state. */
+    ess_mixer_reset(ess);
+    ess_solo1_mixer_set_reset_defaults(ess);
+    ess_solo1_mixer_recalc(ess);
 }
 
 void
@@ -3929,7 +4680,8 @@ ess_186x_pnp_config_changed(const uint8_t ld, isapnp_device_config_t *config, vo
             gameport_remap(ess->gameport, (config->activate && (config->io[0].base != ISAPNP_IO_DISABLED)) ? config->io[0].base : 0);
             break;
         case 3: /* IDE */
-            ide_pnp_config_changed_1addr(0, config, (void *) 3);
+            if (ess->has_ide)
+                ide_pnp_config_changed_1addr(0, config, (void *) 3);
             break;
         default:
             break;
@@ -4438,9 +5190,11 @@ es186x_pnp_write(uint16_t port, uint8_t val, void *priv)
                 case 1:
                     ess->es186x_confaddr = (val << 8) | ess->es186x_confaddr;
                     sb_log("ES186x PnP bypass, new control addr = %04X\n", ess->es186x_confaddr);
-                    ess->es186x_bypass_conf->activate = 1;
-                    ess->es186x_bypass_conf->io[0].base = ess->es186x_confaddr;
-                    ess_186x_pnp_config_changed(0, ess->es186x_bypass_conf, ess);
+                    /* The bypass key sets the configuration device's address register and
+                       activate bit, so later PnP accesses to logical device 0 see them. */
+                    isapnp_write_reg(ess->pnp_card, 0, 0x60, ess->es186x_confaddr >> 8);
+                    isapnp_write_reg(ess->pnp_card, 0, 0x61, ess->es186x_confaddr & 0xff);
+                    isapnp_write_reg(ess->pnp_card, 0, 0x30, 1);
                     ess->es186x_bypass_state = 0;
                     ess->es186x_bypass = 0;
                     break;
@@ -4454,6 +5208,28 @@ es186x_pnp_write(uint16_t port, uint8_t val, void *priv)
                 ess->es186x_bypass = 1;
             }
         }
+    }
+}
+
+void
+ess_calc_input_gains(void)
+{
+    int c = 0;
+    double  attenuation;
+    for (c = 0; c < 16; c++) {
+        attenuation = -6.0;
+        if (c & 0x01)
+            attenuation += 1.5;
+        if (c & 0x02)
+            attenuation += 3.0;
+        if (c & 0x04)
+            attenuation += 6.0;
+        if (c & 0x08)
+            attenuation += 12.0;
+
+        attenuation = pow(10, attenuation / 10);
+
+        ess_input_gain_vols_4bits[c] = (int) (attenuation);
     }
 }
 
@@ -4558,12 +5334,14 @@ sb_init(UNUSED(const device_t *info))
 
     sound_add_handler(sb_get_buffer_sb2, sb);
     sound_add_handler(sb_get_cms_buffer_sb2, sb);
+    sound_in_add_handler(sb_put_buffer_sb, sb);
+    sound_in_start_input();
     if (sb->opl_enabled)
         music_add_handler(sb_get_music_buffer_sb2, sb);
     sound_set_cd_audio_filter(sb2_filter_cd_audio, sb);
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &sb->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &sb->dsp);
 
     return sb;
 }
@@ -4613,6 +5391,8 @@ thunderboard_init(UNUSED(const device_t *info))
     sb->cms_enabled   = 0;
     sb->mixer_enabled = 0;
     sound_add_handler(sb_get_buffer_sb2, sb);
+    sound_in_add_handler(sb_put_buffer_sb, sb);
+    sound_in_start_input();
     if (sb->opl_enabled)
         music_add_handler(sb_get_music_buffer_sb2, sb);
     sound_set_cd_audio_filter(sb2_filter_cd_audio, sb);
@@ -4640,6 +5420,8 @@ sb_mcv_init(UNUSED(const device_t *info))
 
     sb->mixer_enabled = 0;
     sound_add_handler(sb_get_buffer_sb2, sb);
+    sound_in_add_handler(sb_put_buffer_sb, sb);
+    sound_in_start_input();
     if (sb->opl_enabled)
         music_add_handler(sb_get_music_buffer_sb2, sb);
     sound_set_cd_audio_filter(sb2_filter_cd_audio, sb);
@@ -4650,7 +5432,7 @@ sb_mcv_init(UNUSED(const device_t *info))
     sb->pos_regs[1] = 0x50;
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &sb->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &sb->dsp);
 
     if (device_get_config_int("gameport")) {
         sb->gameport      = gameport_add(&gameport_200_device);
@@ -4734,12 +5516,14 @@ sb_pro_v1_init(UNUSED(const device_t *info))
                   sb_ct1345_mixer_write, NULL, NULL,
                   sb);
     sound_add_handler(sb_get_buffer_sbpro, sb);
+    sound_in_add_handler(sb_put_buffer_sbpro, sb);
+    sound_in_start_input();
     if (sb->opl_enabled)
         music_add_handler(sb_get_music_buffer_sbpro, sb);
     sound_set_cd_audio_filter(sbpro_filter_cd_audio, sb);
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &sb->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &sb->dsp);
 
     if (device_get_config_int("gameport")) {
         sb->gameport      = gameport_add(&gameport_200_device);
@@ -4794,12 +5578,14 @@ sb_pro_v2_init(UNUSED(const device_t *info))
                   sb_ct1345_mixer_write, NULL, NULL,
                   sb);
     sound_add_handler(sb_get_buffer_sbpro, sb);
+    sound_in_add_handler(sb_put_buffer_sbpro, sb);
+    sound_in_start_input();
     if (sb->opl_enabled)
         music_add_handler(sb_get_music_buffer_sbpro, sb);
     sound_set_cd_audio_filter(sbpro_filter_cd_audio, sb);
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &sb->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &sb->dsp);
 
     if (device_get_config_int("gameport")) {
         sb->gameport      = gameport_add(&gameport_200_device);
@@ -4828,6 +5614,8 @@ sb_pro_mcv_init(UNUSED(const device_t *info))
 
     sb->mixer_enabled = 1;
     sound_add_handler(sb_get_buffer_sbpro, sb);
+    sound_in_add_handler(sb_put_buffer_sbpro, sb);
+    sound_in_start_input();
     music_add_handler(sb_get_music_buffer_sbpro, sb);
     sound_set_cd_audio_filter(sbpro_filter_cd_audio, sb);
 
@@ -4837,7 +5625,7 @@ sb_pro_mcv_init(UNUSED(const device_t *info))
     sb->pos_regs[1] = 0x51;
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &sb->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &sb->dsp);
 
     if (device_get_config_int("gameport")) {
         sb->gameport      = gameport_add(&gameport_200_device);
@@ -4916,6 +5704,8 @@ sb_16_init(UNUSED(const device_t *info))
     io_sethandler(addr + 4, 0x0002, sb_ct1745_mixer_read, NULL, NULL,
                   sb_ct1745_mixer_write, NULL, NULL, sb);
     sound_add_handler(sb_get_buffer_sb16_awe32, sb);
+    sound_in_add_handler(sb_put_buffer_sb16_awe32, sb);
+    sound_in_start_input();
     if (sb->opl_enabled)
         music_add_handler(sb_get_music_buffer_sb16_awe32, sb);
     sound_set_cd_audio_filter(sb16_awe32_filter_cd_audio, sb);
@@ -4933,7 +5723,7 @@ sb_16_init(UNUSED(const device_t *info))
     sb_dsp_set_mpu(&sb->dsp, sb->mpu);
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &sb->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &sb->dsp);
 
     if (info->local == FM_YMF289B) {
         sb->gameport      = gameport_add(&gameport_pnp_device);
@@ -4966,6 +5756,8 @@ sb_16_reply_mca_init(UNUSED(const device_t *info))
     sb->mixer_enabled            = 1;
     sb->mixer_sb16.output_filter = 1;
     sound_add_handler(sb_get_buffer_sb16_awe32, sb);
+    sound_in_add_handler(sb_put_buffer_sb16_awe32, sb);
+    sound_in_start_input();
     music_add_handler(sb_get_music_buffer_sb16_awe32, sb);
     sound_set_cd_audio_filter(sb16_awe32_filter_cd_audio, sb);
     if (device_get_config_int("control_pc_speaker"))
@@ -4978,7 +5770,7 @@ sb_16_reply_mca_init(UNUSED(const device_t *info))
     sb_dsp_set_mpu(&sb->dsp, sb->mpu);
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &sb->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &sb->dsp);
 
     sb->gameport = gameport_add(&gameport_200_device);
 
@@ -5024,6 +5816,8 @@ sb_16_pnp_init(UNUSED(const device_t *info))
     sb->mixer_enabled            = 1;
     sb->mixer_sb16.output_filter = 1;
     sound_add_handler(sb_get_buffer_sb16_awe32, sb);
+    sound_in_add_handler(sb_put_buffer_sb16_awe32, sb);
+    sound_in_start_input();
     music_add_handler(sb_get_music_buffer_sb16_awe32, sb);
     sound_set_cd_audio_filter(sb16_awe32_filter_cd_audio, sb);
     if (device_get_config_int("control_pc_speaker"))
@@ -5036,7 +5830,7 @@ sb_16_pnp_init(UNUSED(const device_t *info))
     sb_dsp_set_mpu(&sb->dsp, sb->mpu);
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &sb->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &sb->dsp);
 
     sb->gameport = gameport_add(&gameport_pnp_device);
 
@@ -5130,6 +5924,8 @@ sb_vibra16_pnp_init(UNUSED(const device_t *info))
     sb->mixer_enabled            = 1;
     sb->mixer_sb16.output_filter = 1;
     sound_add_handler(sb_get_buffer_sb16_awe32, sb);
+    sound_in_add_handler(sb_put_buffer_sb16_awe32, sb);
+    sound_in_start_input();
     music_add_handler(sb_get_music_buffer_sb16_awe32, sb);
     sound_set_cd_audio_filter(sb16_awe32_filter_cd_audio, sb);
     if (device_get_config_int("control_pc_speaker"))
@@ -5142,7 +5938,7 @@ sb_vibra16_pnp_init(UNUSED(const device_t *info))
     sb_dsp_set_mpu(&sb->dsp, sb->mpu);
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &sb->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &sb->dsp);
 
     switch (info->local) {
         case SB_VIBRA16C:  /* CTL7001 */
@@ -5228,6 +6024,8 @@ sb_16_compat_init(const device_t *info)
     sb->opl_enabled   = 1;
     sb->mixer_enabled = 1;
     sound_add_handler(sb_get_buffer_sb16_awe32, sb);
+    sound_in_add_handler(sb_put_buffer_sb16_awe32, sb);
+    sound_in_start_input();
     music_add_handler(sb_get_music_buffer_sb16_awe32, sb);
 
     sb->mpu = (mpu_t *) calloc(1, sizeof(mpu_t));
@@ -5339,6 +6137,8 @@ sb_awe32_init(UNUSED(const device_t *info))
     io_sethandler(addr + 4, 0x0002, sb_ct1745_mixer_read, NULL, NULL,
                   sb_ct1745_mixer_write, NULL, NULL, sb);
     sound_add_handler(sb_get_buffer_sb16_awe32, sb);
+    sound_in_add_handler(sb_put_buffer_sb16_awe32, sb);
+    sound_in_start_input();
     if (sb->opl_enabled)
         music_add_handler(sb_get_music_buffer_sb16_awe32, sb);
     wavetable_add_handler(sb_get_wavetable_buffer_sb16_awe32, sb);
@@ -5359,7 +6159,7 @@ sb_awe32_init(UNUSED(const device_t *info))
     emu8k_init(&sb->emu8k, emu_addr, onboard_ram);
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &sb->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &sb->dsp);
 
     if (device_get_config_int("gameport")) {
         sb->gameport      = gameport_add(&gameport_200_device);
@@ -5436,6 +6236,8 @@ sb_awe32_pnp_init(const device_t *info)
     sb->mixer_enabled            = 1;
     sb->mixer_sb16.output_filter = 1;
     sound_add_handler(sb_get_buffer_sb16_awe32, sb);
+    sound_in_add_handler(sb_put_buffer_sb16_awe32, sb);
+    sound_in_start_input();
     music_add_handler(sb_get_music_buffer_sb16_awe32, sb);
     wavetable_add_handler(sb_get_wavetable_buffer_sb16_awe32, sb);
     sound_set_cd_audio_filter(sb16_awe32_filter_cd_audio, sb);
@@ -5451,7 +6253,7 @@ sb_awe32_pnp_init(const device_t *info)
     emu8k_init(&sb->emu8k, 0, onboard_ram);
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &sb->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &sb->dsp);
 
     sb->gameport = gameport_add(&gameport_pnp_device);
 
@@ -5621,16 +6423,43 @@ ess_x488_init(UNUSED(const device_t *info))
         sound_add_handler(sb_get_buffer_ess488, ess);
         music_add_handler(sb_get_music_buffer_ess488, ess);
     }
+    sound_in_add_handler(ess_put_buffer_esx488, ess);
+    sound_in_start_input();
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &ess->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &ess->dsp);
 
     if (device_get_config_int("gameport")) {
         ess->gameport      = gameport_add(&gameport_200_device);
         ess->gameport_addr = 0x200;
     }
 
+    int c = 0;
+    double  attenuation;
+    for (c = 0; c < 16; c++) {
+        attenuation = -6.0;
+        if (c & 0x01)
+            attenuation += 1.5;
+        if (c & 0x02)
+            attenuation += 3.0;
+        if (c & 0x04)
+            attenuation += 6.0;
+        if (c & 0x08)
+            attenuation += 12.0;
+
+        attenuation = pow(10, attenuation / 10);
+
+        ess_input_gain_vols_4bits[c] = (int) (attenuation);
+    }
+
     return ess;
+}
+
+/* The IDE port is there only with an address given for it. */
+static uint32_t
+ess_x688_ide_boards(UNUSED(const device_t *dev))
+{
+    return ((device_get_config_int("ide_ctrl") & 0x0fff) > 0x0000) ? (1 << 3) : 0;
 }
 
 static void *
@@ -5704,6 +6533,8 @@ ess_x688_init(UNUSED(const device_t *info))
                   ess);
     sound_add_handler(sb_get_buffer_ess, ess);
     music_add_handler(sb_get_music_buffer_ess, ess);
+    sound_in_add_handler(ess_put_buffer, ess);
+    sound_in_start_input();
     sound_set_cd_audio_filter(ess_filter_cd_audio, ess);
     if (info->local && device_get_config_int("control_pc_speaker"))
         sound_set_pc_speaker_filter(ess_filter_pc_speaker, ess);
@@ -5711,7 +6542,7 @@ ess_x688_init(UNUSED(const device_t *info))
         sound_set_midi_filter(ess_filter_midi, ess);
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &ess->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &ess->dsp);
 
     if (info->local) {
         ess->mpu = (mpu_t *) calloc(1, sizeof(mpu_t));
@@ -5728,12 +6559,30 @@ ess_x688_init(UNUSED(const device_t *info))
 
     if (ide_base > 0x0000) {
         device_add(&ide_qua_pnp_device);
-        ide_set_base(4, ide_base);
-        ide_set_side(4, ide_side);
-        ide_set_irq(4, ide_irq);
+        ide_set_base(3, ide_base);
+        ide_set_side(3, ide_side);
+        ide_set_irq(3, ide_irq);
         other_ide_present++;
 
         ess->has_ide = 1;
+    }
+
+    int c = 0;
+    double  attenuation;
+    for (c = 0; c < 16; c++) {
+        attenuation = -6.0;
+        if (c & 0x01)
+            attenuation += 1.5;
+        if (c & 0x02)
+            attenuation += 3.0;
+        if (c & 0x04)
+            attenuation += 6.0;
+        if (c & 0x08)
+            attenuation += 12.0;
+
+        attenuation = pow(10, attenuation / 10);
+
+        ess_input_gain_vols_4bits[c] = (int) (attenuation);
     }
 
     return ess;
@@ -5781,6 +6630,8 @@ ess_x688_pnp_init(UNUSED(const device_t *info))
     ess->mixer_enabled = 1;
     sound_add_handler(sb_get_buffer_ess, ess);
     music_add_handler(sb_get_music_buffer_ess, ess);
+    sound_in_add_handler(ess_put_buffer, ess);
+    sound_in_start_input();
     sound_set_cd_audio_filter(ess_filter_cd_audio, ess);
     if ((info->local & 1) && device_get_config_int("control_pc_speaker"))
         sound_set_pc_speaker_filter(ess_filter_pc_speaker, ess);
@@ -5788,7 +6639,7 @@ ess_x688_pnp_init(UNUSED(const device_t *info))
         sound_set_midi_filter(ess_filter_midi, ess);
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &ess->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &ess->dsp);
 
     ess->mpu = (mpu_t *) calloc(1, sizeof(mpu_t));
     /* NOTE: The MPU is initialized disabled and with no IRQ assigned.
@@ -5851,6 +6702,24 @@ ess_x688_pnp_init(UNUSED(const device_t *info))
 
     ide_remove_handlers(3);
 
+    int c = 0;
+    double  attenuation;
+    for (c = 0; c < 16; c++) {
+        attenuation = -6.0;
+        if (c & 0x01)
+            attenuation += 1.5;
+        if (c & 0x02)
+            attenuation += 3.0;
+        if (c & 0x04)
+            attenuation += 6.0;
+        if (c & 0x08)
+            attenuation += 12.0;
+
+        attenuation = pow(10, attenuation / 10);
+
+        ess_input_gain_vols_4bits[c] = (int) (attenuation);
+    }
+
     return ess;
 }
 
@@ -5874,6 +6743,8 @@ ess_x688_mca_init(UNUSED(const device_t *info))
     ess->mixer_enabled = 1;
     sound_add_handler(sb_get_buffer_ess, ess);
     music_add_handler(sb_get_music_buffer_ess, ess);
+    sound_in_add_handler(ess_put_buffer, ess);
+    sound_in_start_input();
     sound_set_cd_audio_filter(ess_filter_cd_audio, ess);
     if (info->local && device_get_config_int("control_pc_speaker"))
         sound_set_pc_speaker_filter(ess_filter_pc_speaker, ess);
@@ -5891,7 +6762,7 @@ ess_x688_mca_init(UNUSED(const device_t *info))
     mpu401_change_addr(ess->mpu, 0);
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &ess->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &ess->dsp);
 
     ess->gameport_addr = 0;
     gameport_remap(ess->gameport, 0);
@@ -5907,6 +6778,24 @@ ess_x688_mca_init(UNUSED(const device_t *info))
         mca_add(ess_x688_mca_read, ess_soundpiper_mca_write, sb_mcv_feedb, NULL, ess);
         ess->pos_regs[0] = 0x30;
         ess->pos_regs[1] = 0x51;
+    }
+
+    int c = 0;
+    double  attenuation;
+    for (c = 0; c < 16; c++) {
+        attenuation = -6.0;
+        if (c & 0x01)
+            attenuation += 1.5;
+        if (c & 0x02)
+            attenuation += 3.0;
+        if (c & 0x04)
+            attenuation += 6.0;
+        if (c & 0x08)
+            attenuation += 12.0;
+
+        attenuation = pow(10, attenuation / 10);
+
+        ess_input_gain_vols_4bits[c] = (int) (attenuation);
     }
 
     return ess;
@@ -5959,12 +6848,14 @@ ess_1x88_onboard_init(const device_t *info)
     ess->mixer_ess.regs[0x40] = 0x02;
     sound_add_handler(sb_get_buffer_ess, ess);
     music_add_handler(sb_get_music_buffer_ess, ess);
+    sound_in_add_handler(ess_put_buffer, ess);
+    sound_in_start_input();
     sound_set_cd_audio_filter(ess_filter_cd_audio, ess);
     if (device_get_config_int("control_pc_speaker"))
         sound_set_pc_speaker_filter(ess_filter_pc_speaker, ess);
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &ess->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &ess->dsp);
 
     ess->mpu = (mpu_t *) calloc(1, sizeof(mpu_t));
     /* NOTE: The MPU is initialized disabled and with no IRQ assigned.
@@ -6049,6 +6940,22 @@ ess_1x88_onboard_init(const device_t *info)
         ess_att_6bits[c] = (attenuation * 65536);
     }
 
+    for (c = 0; c < 16; c++) {
+        attenuation = -6.0;
+        if (c & 0x01)
+            attenuation += 1.5;
+        if (c & 0x02)
+            attenuation += 3.0;
+        if (c & 0x04)
+            attenuation += 6.0;
+        if (c & 0x08)
+            attenuation += 12.0;
+
+        attenuation = pow(10, attenuation / 10);
+
+        ess_input_gain_vols_4bits[c] = (int) (attenuation);
+    }
+
     return ess;
 }
 
@@ -6060,7 +6967,7 @@ ess_186x_init(const device_t *info)
     fm_driver_get_cs(FM_ESFM, &ess->opl);
 
     sb_dsp_set_real_opl(&ess->dsp, 1);
-    if (info->local)
+    if (info->local & 1)
         sb_dsp_init(&ess->dsp, SBPRO_DSP_301, SB_SUBTYPE_ESS_ES1869, ess);
     else
         sb_dsp_init(&ess->dsp, SBPRO_DSP_301, SB_SUBTYPE_ESS_ES1868, ess);
@@ -6074,6 +6981,8 @@ ess_186x_init(const device_t *info)
     ess->mixer_enabled = 1;
     sound_add_handler(sb_get_buffer_ess, ess);
     music_add_handler(sb_get_music_buffer_ess, ess);
+    sound_in_add_handler(ess_put_buffer, ess);
+    sound_in_start_input();
     sound_set_cd_audio_filter(ess_filter_cd_audio, ess);
     if (device_get_config_int("control_pc_speaker"))
         sound_set_pc_speaker_filter(ess_filter_pc_speaker, ess);
@@ -6081,7 +6990,7 @@ ess_186x_init(const device_t *info)
         sound_set_midi_filter(ess_filter_midi, ess);
 
     if (device_get_config_int("receive_input"))
-        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, &ess->dsp);
+        midi_in_handler(1, sb_dsp_input_msg, sb_dsp_input_sysex, sb_dsp_input_remain, &ess->dsp);
 
     ess->mpu = (mpu_t *) calloc(1, sizeof(mpu_t));
     /* NOTE: The MPU is initialized disabled and with no IRQ assigned.
@@ -6091,10 +7000,13 @@ ess_186x_init(const device_t *info)
 
     ess->gameport = gameport_add(&gameport_pnp_device);
 
-    device_add(&ide_qua_pnp_device);
-    other_ide_present++;
+    /* On-board chips have their IDE interface left unconnected. */
+    if (!(info->local & 2)) {
+        device_add(&ide_qua_pnp_device);
+        other_ide_present++;
 
-    ess->has_ide = 1;
+        ess->has_ide = 1;
+    }
 
     const char *pnp_rom_file = NULL;
     uint16_t    pnp_rom_len  = 512;
@@ -6120,7 +7032,6 @@ ess_186x_init(const device_t *info)
     ess->pnp_card = isapnp_add_card(pnp_rom, sizeof(ess->pnp_rom), ess_186x_pnp_config_changed,
                                     NULL, NULL, NULL, ess);
     io_sethandler(0x0279, 0x0001, NULL, NULL, NULL, es186x_pnp_write, NULL, NULL, ess);
-    ess->es186x_bypass_conf = (isapnp_device_config_t *) calloc(1, sizeof(isapnp_device_config_t));
 
     sb_dsp_setaddr(&ess->dsp, 0);
     sb_dsp_setirq(&ess->dsp, 0);
@@ -6132,7 +7043,8 @@ ess_186x_init(const device_t *info)
     ess->gameport_addr = 0;
     gameport_remap(ess->gameport, 0);
 
-    ide_remove_handlers(3);
+    if (ess->has_ide)
+        ide_remove_handlers(3);
 
     sound_add_handler(sb_get_buffer_ess_dac2, ess);
     timer_add(&ess->ess_dac2_timer, ess_dac2_poll, ess, 0);
@@ -6178,7 +7090,461 @@ ess_186x_init(const device_t *info)
         ess_att_6bits[c] = (attenuation * 65536);
     }
 
+    for (c = 0; c < 16; c++) {
+        attenuation = -6.0;
+        if (c & 0x01)
+            attenuation += 1.5;
+        if (c & 0x02)
+            attenuation += 3.0;
+        if (c & 0x04)
+            attenuation += 6.0;
+        if (c & 0x08)
+            attenuation += 12.0;
+
+        attenuation = pow(10, attenuation / 10);
+
+        ess_input_gain_vols_4bits[c] = (int) (attenuation);
+    }
+
     return ess;
+}
+
+/*
+ * ESS Solo-1 DOS mode
+ */
+
+static int
+solo1_legacy_dma_readb(void *priv)
+{
+    sb_t *ess = (sb_t *) priv;
+    int ch = ess->dsp.sb_8_dmanum;
+    int ret = dma_channel_read(ch);
+
+
+    return ret;
+}
+
+static int
+solo1_legacy_dma_readw(void *priv)
+{
+    sb_t *ess = (sb_t *) priv;
+    int ch = ess->dsp.sb_16_dmanum;
+    int lo = dma_channel_read(ch);
+    int hi;
+
+    if (lo & DMA_NODATA)
+        return lo;
+
+    hi = dma_channel_read(ch);
+    if (hi & DMA_NODATA)
+        return hi;
+
+
+    return (lo & 0xff) | ((hi & 0xff) << 8);
+}
+
+static int
+solo1_legacy_dma_writeb(void *priv, uint8_t val)
+{
+    sb_t *ess = (sb_t *) priv;
+    int ch = ess->dsp.sb_8_dmanum;
+    int ret = dma_channel_write(ch, val);
+
+
+    return ret == DMA_NODATA;
+}
+
+static int
+solo1_legacy_dma_writew(void *priv, uint16_t val)
+{
+    sb_t *ess = (sb_t *) priv;
+    int ch = ess->dsp.sb_16_dmanum;
+    int ret;
+
+    ret = dma_channel_write(ch, val & 0xff);
+    if (ret == DMA_NODATA)
+        return 1;
+
+    ret = dma_channel_write(ch, val >> 8);
+
+
+    return ret == DMA_NODATA;
+}
+
+/* sb_doreset() is needed for the Solo-1 but appears to not be declared,
+ * so doing it here to keep it local
+ */
+extern void sb_doreset(sb_dsp_t *dsp);
+
+/* The Solo-1 legacy core's Audio 1 interrupt: on the Solo-1's INTA pin
+   when it is attached there, else on the Sound Blaster ISA IRQ. */
+static void
+ess_solo1_legacy_dsp_irq(void *priv, int set)
+{
+    const sb_t *ess = (const sb_t *) priv;
+
+    if (ess->solo1_irq_update != NULL)
+        ess->solo1_irq_update(ess->solo1_irq_priv, set);
+    else if (ess->dsp.sb_irqnum) {
+        if (set)
+            picint(1 << ess->dsp.sb_irqnum);
+        else
+            picintc(1 << ess->dsp.sb_irqnum);
+    }
+}
+
+static void
+ess_solo1_legacy_mpu_irq(void *priv, int set)
+{
+    const sb_t *ess = (const sb_t *) priv;
+
+    if (ess->solo1_irq_update != NULL)
+        ess->solo1_irq_update(ess->solo1_irq_priv, set);
+}
+
+void *
+ess_solo1_legacy_init(void)
+{
+    sb_t *ess = calloc(1, sizeof(sb_t));
+
+
+    ess->opl_enabled = 1;
+    fm_driver_get_cs(FM_ESFM, &ess->opl);
+
+    sb_dsp_set_real_opl(&ess->dsp, 1);
+    sb_dsp_init(&ess->dsp, SBPRO_DSP_301, SB_SUBTYPE_ESS_ES1869, ess);
+    sb_dsp_dma_attach(&ess->dsp,
+                      solo1_legacy_dma_readb,
+                      solo1_legacy_dma_readw,
+                      solo1_legacy_dma_writeb,
+                      solo1_legacy_dma_writew,
+                      ess);
+    sb_dsp_setdma16_supported(&ess->dsp, 0);
+    sb_dsp_irq_attach(&ess->dsp, ess_solo1_legacy_dsp_irq, ess);
+    ess_solo1_mixer_reset(ess);
+
+    ess->mixer_ess.input_filter  = 1;
+    ess->mixer_ess.output_filter = 1;
+    ess->mixer_enabled           = 1;
+
+    sound_add_handler(sb_get_buffer_ess, ess);
+    music_add_handler(sb_get_music_buffer_ess, ess);
+    sound_set_cd_audio_filter(ess_filter_cd_audio, ess);
+
+    ess->mpu = (mpu_t *) calloc(1, sizeof(mpu_t));
+    mpu401_init(ess->mpu, 0, -1, M_UART, 0);
+    sb_dsp_set_mpu(&ess->dsp, ess->mpu);
+
+    ess->gameport = gameport_add(&gameport_pnp_device);
+
+    sb_dsp_setaddr(&ess->dsp, 0);
+    sb_dsp_setirq(&ess->dsp, 0);
+    sb_dsp_setdma8(&ess->dsp, ISAPNP_DMA_DISABLED);
+    sb_dsp_setdma16_8(&ess->dsp, ISAPNP_DMA_DISABLED);
+    mpu401_change_addr(ess->mpu, 0);
+    mpu401_setirq(ess->mpu, -1);
+    gameport_remap(ess->gameport, 0);
+
+    return ess;
+}
+
+void
+ess_solo1_legacy_reset(void *priv)
+{
+    sb_t *ess = (sb_t *) priv;
+
+    if (ess == NULL)
+        return;
+
+    sb_doreset(&ess->dsp);
+
+    memset(ess->dsp.ess_regs, 0x00, sizeof(ess->dsp.ess_regs));
+    ess->dsp.ess_regs[0x05] = 0xf8; /* A5h reset value used by sb_doreset(). */
+    ess->dsp.ess_playback_mode = 0;
+    ess->dsp.ess_irq_generic   = 0;
+    ess->dsp.ess_irq_dmactr    = 0;
+    ess->dsp.ess_dma_counter   = 0;
+
+    ess_solo1_mixer_reset(ess);
+    ess->mixer_ess.input_filter  = 1;
+    ess->mixer_ess.output_filter = 1;
+    ess->mixer_enabled           = 1;
+}
+
+void
+ess_solo1_legacy_config(void *priv, uint16_t sb_addr, int sb_enable,
+                        int fm_enable, int fm_legacy_alias,
+                        uint16_t mpu_addr, int mpu_enable,
+                        int sb_irq, int mpu_irq, int dma, uint16_t game_addr)
+{
+    sb_t    *ess = (sb_t *) priv;
+    uint16_t old_sb;
+
+    if (ess == NULL)
+        return;
+
+    old_sb = ess->dsp.sb_addr;
+
+    if (old_sb) {
+        io_removehandler(old_sb, 0x0004,
+                         ess->opl.read, NULL, NULL,
+                         ess->opl.write, NULL, NULL,
+                         ess->opl.priv);
+        io_removehandler(old_sb + 8, 0x0002,
+                         ess->opl.read, NULL, NULL,
+                         ess->opl.write, NULL, NULL,
+                         ess->opl.priv);
+        io_removehandler(old_sb + 8, 0x0002,
+                         ess_fm_midi_read, NULL, NULL,
+                         ess_fm_midi_write, NULL, NULL,
+                         ess);
+        io_removehandler(old_sb + 4, 0x0002,
+                         ess_mixer_read, NULL, NULL,
+                         ess_solo1_mixer_write, NULL, NULL,
+                         ess);
+        io_removehandler(old_sb + 2, 0x0003,
+                         ess_base_read, NULL, NULL,
+                         ess_base_write, NULL, NULL,
+                         ess);
+        io_removehandler(old_sb + 6, 0x0001,
+                         ess_base_read, NULL, NULL,
+                         ess_base_write, NULL, NULL,
+                         ess);
+        io_removehandler(old_sb + 0x0a, 0x0006,
+                         ess_base_read, NULL, NULL,
+                         ess_base_write, NULL, NULL,
+                         ess);
+    }
+
+    if (ess->opl_pnp_addr) {
+        io_removehandler(ess->opl_pnp_addr, 0x0004,
+                         ess->opl.read, NULL, NULL,
+                         ess->opl.write, NULL, NULL,
+                         ess->opl.priv);
+        io_removehandler(ess->opl_pnp_addr, 0x0004,
+                         ess_fm_midi_read, NULL, NULL,
+                         ess_fm_midi_write, NULL, NULL,
+                         ess);
+        ess->opl_pnp_addr = 0;
+    }
+
+    sb_dsp_setaddr(&ess->dsp, 0);
+    mpu401_change_addr(ess->mpu, 0);
+    mpu401_setirq(ess->mpu, -1);
+    if (ess->gameport != NULL)
+        gameport_remap(ess->gameport, 0);
+
+    sb_dsp_setirq(&ess->dsp, sb_enable ? sb_irq : 0);
+    sb_dsp_setdma8(&ess->dsp, sb_enable ? dma : ISAPNP_DMA_DISABLED);
+    sb_dsp_setdma16_8(&ess->dsp, sb_enable ? dma : ISAPNP_DMA_DISABLED);
+
+    if (sb_enable) {
+        if (fm_enable) {
+            io_sethandler(sb_addr, 0x0004,
+                          ess->opl.read, NULL, NULL,
+                          ess->opl.write, NULL, NULL,
+                          ess->opl.priv);
+            io_sethandler(sb_addr + 8, 0x0002,
+                          ess->opl.read, NULL, NULL,
+                          ess->opl.write, NULL, NULL,
+                          ess->opl.priv);
+            io_sethandler(sb_addr + 8, 0x0002,
+                          ess_fm_midi_read, NULL, NULL,
+                          ess_fm_midi_write, NULL, NULL,
+                          ess);
+        }
+
+        io_sethandler(sb_addr + 4, 0x0002,
+                      ess_mixer_read, NULL, NULL,
+                      ess_solo1_mixer_write, NULL, NULL,
+                      ess);
+
+        sb_dsp_setaddr(&ess->dsp, sb_addr);
+        io_sethandler(sb_addr + 2, 0x0003,
+                      ess_base_read, NULL, NULL,
+                      ess_base_write, NULL, NULL,
+                      ess);
+        io_sethandler(sb_addr + 6, 0x0001,
+                      ess_base_read, NULL, NULL,
+                      ess_base_write, NULL, NULL,
+                      ess);
+        io_sethandler(sb_addr + 0x0a, 0x0006,
+                      ess_base_read, NULL, NULL,
+                      ess_base_write, NULL, NULL,
+                      ess);
+    }
+
+    if (fm_enable && fm_legacy_alias) {
+        ess->opl_pnp_addr = 0x0388;
+        io_sethandler(ess->opl_pnp_addr, 0x0004,
+                      ess->opl.read, NULL, NULL,
+                      ess->opl.write, NULL, NULL,
+                      ess->opl.priv);
+        io_sethandler(ess->opl_pnp_addr, 0x0004,
+                      ess_fm_midi_read, NULL, NULL,
+                      ess_fm_midi_write, NULL, NULL,
+                      ess);
+    }
+
+    if (mpu_enable) {
+        ess->midi_addr = mpu_addr;
+        mpu401_change_addr(ess->mpu, mpu_addr);
+        mpu401_setirq(ess->mpu, mpu_irq);
+    } else
+        ess->midi_addr = 0;
+
+    ess->gameport_addr = game_addr;
+    if (ess->gameport != NULL)
+        gameport_remap(ess->gameport, ess->gameport_addr);
+}
+
+void
+ess_solo1_legacy_mix_esfm(void *priv, int32_t *buffer, uint16_t len)
+{
+    sb_t          *ess = (sb_t *) priv;
+    const int32_t *opl_buf;
+
+    if (ess == NULL || !ess->opl_enabled || buffer == NULL || !len)
+        return;
+
+    opl_buf = ess->opl.update(ess->opl.priv);
+    if (opl_buf != NULL) {
+        for (uint32_t c = 0; c < (uint32_t) len * 2; c++)
+            buffer[c] += (int32_t) ((double) opl_buf[c] * 0.7171630859375);
+    }
+
+    ess->opl.reset_buffer(ess->opl.priv);
+}
+
+uint8_t
+ess_solo1_legacy_fm_read(void *priv, uint16_t addr)
+{
+    sb_t *ess = (sb_t *) priv;
+
+    if (ess == NULL || !ess->opl_enabled)
+        return 0xff;
+
+    return ess->opl.read(addr, ess->opl.priv);
+}
+
+void
+ess_solo1_legacy_fm_write(void *priv, uint16_t addr, uint8_t val)
+{
+    sb_t *ess = (sb_t *) priv;
+
+    if (ess == NULL || !ess->opl_enabled)
+        return;
+
+    ess->opl.write(addr, val, ess->opl.priv);
+}
+
+void
+ess_solo1_legacy_mixer_write(void *priv, uint8_t index, uint8_t val)
+{
+    sb_t *ess = (sb_t *) priv;
+
+    if (ess == NULL)
+        return;
+
+    ess->mixer_ess.index = index;
+    ess_solo1_mixer_write(5, val, ess);
+}
+
+double
+ess_solo1_legacy_audio2_gain(void *priv, int channel)
+{
+    const sb_t        *ess;
+    const ess_mixer_t *mixer;
+    double             source;
+    double             master;
+
+    ess = (const sb_t *) priv;
+    if (ess == NULL)
+        return 0.0;
+
+    mixer  = &ess->mixer_ess;
+    source = channel ? mixer->dac2_r : mixer->dac2_l;
+    master = channel ? mixer->master_r : mixer->master_l;
+
+    return source * master;
+}
+
+/* Route the Audio 1 and MPU-401 interrupts to irq_update, the Solo-1's
+   INTA pin, or with NULL back to the ISA IRQ's ess_solo1_legacy_config()
+   was given (serial IRQ). */
+void
+ess_solo1_legacy_irq_attach(void *priv, void (*irq_update)(void *priv, int set), void *irq_priv)
+{
+    sb_t *ess = (sb_t *) priv;
+
+    if (ess == NULL)
+        return;
+
+    if ((ess->solo1_irq_update == irq_update) && (ess->solo1_irq_priv == irq_priv))
+        return;
+
+    /* Drop whatever the old route has asserted. */
+    if (ess->dsp.sb_irq8 || ess->dsp.sb_irq16)
+        ess_solo1_legacy_dsp_irq(ess, 0);
+    if ((ess->mpu != NULL) && (ess->mpu->irq > 0) && (ess->mpu->irq <= 15))
+        picint_common(1 << ess->mpu->irq, PIC_IRQ_EDGE, 0, NULL);
+
+    ess->solo1_irq_update = irq_update;
+    ess->solo1_irq_priv   = irq_priv;
+
+    if (ess->mpu != NULL)
+        mpu401_irq_attach(ess->mpu, (irq_update != NULL) ? ess_solo1_legacy_mpu_irq : NULL, NULL, ess);
+}
+
+/* The Audio 1 (SB) and MPU-401 halves of the Solo-1's IRQ status
+   (IOBase+7 bits 4 and 7): set while the source is requesting. The MPU-401
+   requests while it has data for the host, as MPU401_ReadRaiseIRQ() drives
+   its line; irq_pending is not cleared by reads in UART mode. */
+uint8_t
+ess_solo1_legacy_irq_status(void *priv)
+{
+    const sb_t *ess = (const sb_t *) priv;
+    uint8_t     ret = 0x00;
+
+    if (ess == NULL)
+        return ret;
+
+    if (ess->dsp.sb_irq8 || ess->dsp.sb_irq16)
+        ret |= 0x10;
+    if ((ess->mpu != NULL) && ess->mpu->queue_used)
+        ret |= 0x80;
+
+    return ret;
+}
+
+uint8_t
+ess_solo1_legacy_mpu_read(void *priv, uint16_t addr)
+{
+    sb_t *ess = (sb_t *) priv;
+
+    if (ess == NULL || ess->mpu == NULL)
+        return 0xff;
+
+    return mpu401_read(addr, ess->mpu);
+}
+
+void
+ess_solo1_legacy_mpu_write(void *priv, uint16_t addr, uint8_t val)
+{
+    sb_t *ess = (sb_t *) priv;
+
+    if (ess == NULL || ess->mpu == NULL)
+        return;
+
+    mpu401_write(addr, val, ess->mpu);
+}
+
+void
+ess_solo1_legacy_close(void *priv)
+{
+    ess_solo1_legacy_config(priv, 0, 0, 0, 0, 0, 0, 0, 0,
+                            ISAPNP_DMA_DISABLED, 0);
+    sb_close(priv);
 }
 
 void
@@ -8298,7 +9664,7 @@ static const device_config_t ess_1688_pnp_config[] = {
 const device_t thunderboard_device = {
     .name          = "Media Vision Thunder Board",
     .internal_name = "thunderboard",
-    .flags         = DEVICE_ISA,
+    .flags         = DEVICE_ISA | DEVICE_AUDIO_IN,
     .local         = THUNDERBOARD,
     .init          = thunderboard_init,
     .close         = sb_close,
@@ -8312,7 +9678,7 @@ const device_t thunderboard_device = {
 const device_t sb_1_device = {
     .name          = "Sound Blaster v1.0",
     .internal_name = "sb",
-    .flags         = DEVICE_ISA,
+    .flags         = DEVICE_ISA | DEVICE_AUDIO_IN,
     .local         = SB_1,
     .init          = sb_init,
     .close         = sb_close,
@@ -8326,7 +9692,7 @@ const device_t sb_1_device = {
 const device_t sb_15_device = {
     .name          = "Sound Blaster v1.5",
     .internal_name = "sb1.5",
-    .flags         = DEVICE_ISA,
+    .flags         = DEVICE_ISA | DEVICE_AUDIO_IN,
     .local         = SB_15,
     .init          = sb_init,
     .close         = sb_close,
@@ -8340,7 +9706,7 @@ const device_t sb_15_device = {
 const device_t sb_mcv_device = {
     .name          = "Sound Blaster MCV",
     .internal_name = "sbmcv",
-    .flags         = DEVICE_MCA,
+    .flags         = DEVICE_MCA | DEVICE_AUDIO_IN,
     .local         = 0,
     .init          = sb_mcv_init,
     .close         = sb_close,
@@ -8354,7 +9720,7 @@ const device_t sb_mcv_device = {
 const device_t sb_2_device = {
     .name          = "Sound Blaster v2.0",
     .internal_name = "sb2.0",
-    .flags         = DEVICE_ISA,
+    .flags         = DEVICE_ISA | DEVICE_AUDIO_IN,
     .local         = SB_2,
     .init          = sb_init,
     .close         = sb_close,
@@ -8368,7 +9734,7 @@ const device_t sb_2_device = {
 const device_t sb_pro_v1_device = {
     .name          = "Sound Blaster Pro v1",
     .internal_name = "sbprov1",
-    .flags         = DEVICE_ISA,
+    .flags         = DEVICE_ISA | DEVICE_AUDIO_IN,
     .local         = 0,
     .init          = sb_pro_v1_init,
     .close         = sb_close,
@@ -8382,7 +9748,7 @@ const device_t sb_pro_v1_device = {
 const device_t sb_pro_v2_device = {
     .name          = "Sound Blaster Pro v2",
     .internal_name = "sbprov2",
-    .flags         = DEVICE_ISA,
+    .flags         = DEVICE_ISA | DEVICE_AUDIO_IN,
     .local         = 0,
     .init          = sb_pro_v2_init,
     .close         = sb_close,
@@ -8396,7 +9762,7 @@ const device_t sb_pro_v2_device = {
 const device_t sb_pro_mcv_device = {
     .name          = "Sound Blaster Pro MCV",
     .internal_name = "sbpromcv",
-    .flags         = DEVICE_MCA,
+    .flags         = DEVICE_MCA | DEVICE_AUDIO_IN,
     .local         = 0,
     .init          = sb_pro_mcv_init,
     .close         = sb_close,
@@ -8424,7 +9790,7 @@ const device_t sb_pro_compat_device = {
 const device_t sb_16_device = {
     .name          = "Sound Blaster 16",
     .internal_name = "sb16",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = FM_YMF262,
     .init          = sb_16_init,
     .close         = sb_close,
@@ -8438,7 +9804,7 @@ const device_t sb_16_device = {
 const device_t sb_vibra16c_onboard_device = {
     .name          = "Sound Blaster ViBRA 16C (On-Board)",
     .internal_name = "sb_vibra16c_onboard",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = SB_VIBRA16C,
     .init          = sb_vibra16_pnp_init,
     .close         = sb_close,
@@ -8452,7 +9818,7 @@ const device_t sb_vibra16c_onboard_device = {
 const device_t sb_vibra16c_device = {
     .name          = "Sound Blaster ViBRA 16C",
     .internal_name = "sb_vibra16c",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = SB_VIBRA16C,
     .init          = sb_vibra16_pnp_init,
     .close         = sb_close,
@@ -8466,7 +9832,7 @@ const device_t sb_vibra16c_device = {
 const device_t sb_vibra16cl_onboard_device = {
     .name          = "Sound Blaster ViBRA 16CL (On-Board)",
     .internal_name = "sb_vibra16cl_onboard",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = SB_VIBRA16CL,
     .init          = sb_vibra16_pnp_init,
     .close         = sb_close,
@@ -8480,7 +9846,7 @@ const device_t sb_vibra16cl_onboard_device = {
 const device_t sb_vibra16cl_device = {
     .name          = "Sound Blaster ViBRA 16CL",
     .internal_name = "sb_vibra16cl",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = SB_VIBRA16CL,
     .init          = sb_vibra16_pnp_init,
     .close         = sb_close,
@@ -8494,7 +9860,7 @@ const device_t sb_vibra16cl_device = {
 const device_t sb_vibra16s_onboard_device = {
     .name          = "Sound Blaster ViBRA 16S (On-Board)",
     .internal_name = "sb_vibra16s_onboard",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = FM_YMF289B,
     .init          = sb_16_init,
     .close         = sb_close,
@@ -8508,7 +9874,7 @@ const device_t sb_vibra16s_onboard_device = {
 const device_t sb_vibra16s_device = {
     .name          = "Sound Blaster ViBRA 16S",
     .internal_name = "sb_vibra16s",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = FM_YMF289B,
     .init          = sb_16_init,
     .close         = sb_close,
@@ -8522,7 +9888,7 @@ const device_t sb_vibra16s_device = {
 const device_t sb_vibra16xv_onboard_device = {
     .name          = "Sound Blaster ViBRA 16XV (On-Board)",
     .internal_name = "sb_vibra16xv_onboard",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = SB_VIBRA16XV,
     .init          = sb_vibra16_pnp_init,
     .close         = sb_close,
@@ -8536,7 +9902,7 @@ const device_t sb_vibra16xv_onboard_device = {
 const device_t sb_vibra16xv_device = {
     .name          = "Sound Blaster ViBRA 16XV",
     .internal_name = "sb_vibra16xv",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = SB_VIBRA16XV,
     .init          = sb_vibra16_pnp_init,
     .close         = sb_close,
@@ -8550,7 +9916,7 @@ const device_t sb_vibra16xv_device = {
 const device_t sb_16_reply_mca_device = {
     .name          = "Sound Blaster 16 Reply MCA",
     .internal_name = "sb16_reply_mca",
-    .flags         = DEVICE_MCA,
+    .flags         = DEVICE_MCA | DEVICE_AUDIO_IN,
     .local         = 0,
     .init          = sb_16_reply_mca_init,
     .close         = sb_close,
@@ -8564,7 +9930,7 @@ const device_t sb_16_reply_mca_device = {
 const device_t sb_16_pnp_device = {
     .name          = "Sound Blaster 16 PnP",
     .internal_name = "sb16_pnp",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = SB_16_PNP_NOIDE,
     .init          = sb_16_pnp_init,
     .close         = sb_close,
@@ -8578,7 +9944,7 @@ const device_t sb_16_pnp_device = {
 const device_t sb_16_pnp_ide_device = {
     .name          = "Sound Blaster 16 PnP (IDE)",
     .internal_name = "sb16_pnp_ide",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = SB_16_PNP_IDE,
     .init          = sb_16_pnp_init,
     .close         = sb_close,
@@ -8586,13 +9952,15 @@ const device_t sb_16_pnp_ide_device = {
     .available     = sb_16_pnp_ide_available,
     .speed_changed = sb_speed_changed,
     .force_redraw  = NULL,
-    .config        = sb_16_pnp_config
+    .config        = sb_16_pnp_config,
+    .short_name    = "SB16",
+    .ide_boards    = ide_boards_quaternary
 };
 
 const device_t sb_16_compat_device = {
     .name          = "Sound Blaster 16 (Compatibility)",
     .internal_name = "sb16_compat",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = 1,
     .init          = sb_16_compat_init,
     .close         = sb_close,
@@ -8606,7 +9974,7 @@ const device_t sb_16_compat_device = {
 const device_t sb_16_compat_nompu_device = {
     .name          = "Sound Blaster 16 (Compatibility - MPU-401 Off)",
     .internal_name = "sb16_compat",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = 0,
     .init          = sb_16_compat_init,
     .close         = sb_close,
@@ -8634,7 +10002,7 @@ const device_t sb_goldfinch_device = {
 const device_t sb_32_pnp_device = {
     .name          = "Sound Blaster 32 PnP",
     .internal_name = "sb32_pnp",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = SB_32_PNP,
     .init          = sb_awe32_pnp_init,
     .close         = sb_awe32_close,
@@ -8642,13 +10010,15 @@ const device_t sb_32_pnp_device = {
     .available     = sb_32_pnp_available,
     .speed_changed = sb_speed_changed,
     .force_redraw  = NULL,
-    .config        = sb_32_pnp_config
+    .config        = sb_32_pnp_config,
+    .short_name    = "SB32",
+    .ide_boards    = ide_boards_quaternary
 };
 
 const device_t sb_awe32_device = {
     .name          = "Sound Blaster AWE32",
     .internal_name = "sbawe32",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = 0,
     .init          = sb_awe32_init,
     .close         = sb_awe32_close,
@@ -8662,7 +10032,7 @@ const device_t sb_awe32_device = {
 const device_t sb_awe32_pnp_device = {
     .name          = "Sound Blaster AWE32 PnP",
     .internal_name = "sbawe32_pnp",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = SB_AWE32_PNP,
     .init          = sb_awe32_pnp_init,
     .close         = sb_awe32_close,
@@ -8670,13 +10040,15 @@ const device_t sb_awe32_pnp_device = {
     .available     = sb_awe32_pnp_available,
     .speed_changed = sb_speed_changed,
     .force_redraw  = NULL,
-    .config        = sb_awe32_pnp_config
+    .config        = sb_awe32_pnp_config,
+    .short_name    = "AWE32",
+    .ide_boards    = ide_boards_quaternary
 };
 
 const device_t sb_awe32_ide_pnp_device = {
     .name          = "Sound Blaster AWE32 IDE PnP",
     .internal_name = "sbawe32_ide_pnp",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = SB_AWE32_IDE_PNP,
     .init          = sb_awe32_pnp_init,
     .close         = sb_awe32_close,
@@ -8685,13 +10057,15 @@ const device_t sb_awe32_ide_pnp_device = {
     .speed_changed = sb_speed_changed,
     .force_redraw  = NULL,
     .config        = sb_awe32_pnp_config,
-    .alias         = "Sound Blaster AWE32 IDE PnP Internet Enhanced"
+    .alias         = "Sound Blaster AWE32 IDE PnP Internet Enhanced",
+    .short_name    = "AWE32",
+    .ide_boards    = ide_boards_quaternary
 };
 
 const device_t sb_awe64_value_device = {
     .name          = "Sound Blaster AWE64 Value",
     .internal_name = "sbawe64_value",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = SB_AWE64_VALUE,
     .init          = sb_awe32_pnp_init,
     .close         = sb_awe32_close,
@@ -8705,7 +10079,7 @@ const device_t sb_awe64_value_device = {
 const device_t sb_awe64_device = {
     .name          = "Sound Blaster AWE64",
     .internal_name = "sbawe64",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = SB_AWE64_NOIDE,
     .init          = sb_awe32_pnp_init,
     .close         = sb_awe32_close,
@@ -8719,7 +10093,7 @@ const device_t sb_awe64_device = {
 const device_t sb_awe64_ide_device = {
     .name          = "Sound Blaster AWE64 (IDE)",
     .internal_name = "sbawe64_ide",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = SB_AWE64_IDE,
     .init          = sb_awe32_pnp_init,
     .close         = sb_awe32_close,
@@ -8727,13 +10101,15 @@ const device_t sb_awe64_ide_device = {
     .available     = sb_awe64_ide_available,
     .speed_changed = sb_speed_changed,
     .force_redraw  = NULL,
-    .config        = sb_awe64_config
+    .config        = sb_awe64_config,
+    .short_name    = "AWE64",
+    .ide_boards    = ide_boards_quaternary
 };
 
 const device_t sb_awe64_gold_device = {
     .name          = "Sound Blaster AWE64 Gold",
     .internal_name = "sbawe64_gold",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = SB_AWE64_GOLD,
     .init          = sb_awe32_pnp_init,
     .close         = sb_awe32_close,
@@ -8747,7 +10123,7 @@ const device_t sb_awe64_gold_device = {
 const device_t ess_488_device = {
     .name          = "ESS AudioDrive ES488",
     .internal_name = "ess_es488",
-    .flags         = DEVICE_ISA,
+    .flags         = DEVICE_ISA | DEVICE_AUDIO_IN,
     .local         = 0,
     .init          = ess_x488_init,
     .close         = sb_close,
@@ -8761,7 +10137,7 @@ const device_t ess_488_device = {
 const device_t ess_1488_device = {
     .name          = "ESS AudioDrive ES1488",
     .internal_name = "ess_es1488",
-    .flags         = DEVICE_ISA,
+    .flags         = DEVICE_ISA | DEVICE_AUDIO_IN,
     .local         = 1,
     .init          = ess_x488_init,
     .close         = sb_close,
@@ -8775,7 +10151,7 @@ const device_t ess_1488_device = {
 const device_t ess_688_device = {
     .name          = "ESS AudioDrive ES688",
     .internal_name = "ess_es688",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = 0,
     .init          = ess_x688_init,
     .close         = sb_close,
@@ -8783,13 +10159,15 @@ const device_t ess_688_device = {
     .available     = NULL,
     .speed_changed = sb_speed_changed,
     .force_redraw  = NULL,
-    .config        = ess_688_config
+    .config        = ess_688_config,
+    .short_name    = "ESS ES688",
+    .ide_boards    = ess_x688_ide_boards
 };
 
 const device_t ess_ess0100_pnp_device = {
     .name          = "ESS AudioDrive ES688 (ESS0100) PnP",
     .internal_name = "ess_ess0100_pnp",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = 0,
     .init          = ess_x688_pnp_init,
     .close         = sb_close,
@@ -8797,13 +10175,15 @@ const device_t ess_ess0100_pnp_device = {
     .available     = ess_688_pnp_available,
     .speed_changed = sb_speed_changed,
     .force_redraw  = NULL,
-    .config        = ess_688_pnp_config
+    .config        = ess_688_pnp_config,
+    .short_name    = "ESS ES688",
+    .ide_boards    = ide_boards_quaternary
 };
 
 const device_t ess_1688_device = {
     .name          = "ESS AudioDrive ES1688",
     .internal_name = "ess_es1688",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = 1,
     .init          = ess_x688_init,
     .close         = sb_close,
@@ -8811,13 +10191,15 @@ const device_t ess_1688_device = {
     .available     = NULL,
     .speed_changed = sb_speed_changed,
     .force_redraw  = NULL,
-    .config        = ess_1688_config
+    .config        = ess_1688_config,
+    .short_name    = "ESS ES1688",
+    .ide_boards    = ess_x688_ide_boards
 };
 
 const device_t ess_1688_compaq_device = {
     .name          = "ESS AudioDrive ES1688 (Compaq)",
     .internal_name = "ess_es1688_compaq",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = 0,
     .init          = ess_1x88_onboard_init,
     .close         = sb_close,
@@ -8831,7 +10213,7 @@ const device_t ess_1688_compaq_device = {
 const device_t ess_ess0102_pnp_device = {
     .name          = "ESS AudioDrive ES1688 (ESS0102) PnP",
     .internal_name = "ess_ess0102_pnp",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = 1,
     .init          = ess_x688_pnp_init,
     .close         = sb_close,
@@ -8839,13 +10221,15 @@ const device_t ess_ess0102_pnp_device = {
     .available     = ess_1688_pnp_available,
     .speed_changed = sb_speed_changed,
     .force_redraw  = NULL,
-    .config        = ess_1688_pnp_config
+    .config        = ess_1688_pnp_config,
+    .short_name    = "ESS ES1688",
+    .ide_boards    = ide_boards_quaternary
 };
 
 const device_t ess_ess0968_pnp_688_device = {
     .name          = "ESS AudioDrive ES688 (ESS0968) PnP",
     .internal_name = "ess_ess0968_pnp_es688",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = 2,
     .init          = ess_x688_pnp_init,
     .close         = sb_close,
@@ -8853,13 +10237,15 @@ const device_t ess_ess0968_pnp_688_device = {
     .available     = ess_1688_968_pnp_available,
     .speed_changed = sb_speed_changed,
     .force_redraw  = NULL,
-    .config        = ess_688_pnp_es0968_config
+    .config        = ess_688_pnp_es0968_config,
+    .short_name    = "ESS ES688",
+    .ide_boards    = ide_boards_quaternary
 };
 
 const device_t ess_ess0968_pnp_device = {
     .name          = "ESS AudioDrive ES1688 (ESS0968) PnP",
     .internal_name = "ess_ess0968_pnp",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = 3,
     .init          = ess_x688_pnp_init,
     .close         = sb_close,
@@ -8867,13 +10253,15 @@ const device_t ess_ess0968_pnp_device = {
     .available     = ess_1688_968_pnp_available,
     .speed_changed = sb_speed_changed,
     .force_redraw  = NULL,
-    .config        = ess_1688_pnp_config
+    .config        = ess_1688_pnp_config,
+    .short_name    = "ESS ES1688",
+    .ide_boards    = ide_boards_quaternary
 };
 
 const device_t ess_soundpiper_16_mca_device = {
     .name          = "SoundPiper 16 (ESS AudioDrive ES688) MCA",
     .internal_name = "soundpiper_16_mca",
-    .flags         = DEVICE_MCA,
+    .flags         = DEVICE_MCA | DEVICE_AUDIO_IN,
     .local         = 0,
     .init          = ess_x688_mca_init,
     .close         = sb_close,
@@ -8887,7 +10275,7 @@ const device_t ess_soundpiper_16_mca_device = {
 const device_t ess_soundpiper_32_mca_device = {
     .name          = "SoundPiper 32 (ESS AudioDrive ES1688) MCA",
     .internal_name = "soundpiper_32_mca",
-    .flags         = DEVICE_MCA,
+    .flags         = DEVICE_MCA | DEVICE_AUDIO_IN,
     .local         = 1,
     .init          = ess_x688_mca_init,
     .close         = sb_close,
@@ -8901,7 +10289,7 @@ const device_t ess_soundpiper_32_mca_device = {
 const device_t ess_chipchat_16_mca_device = {
     .name          = "ChipChat 16 (ESS AudioDrive ES1688) MCA",
     .internal_name = "chipchat_16_mca",
-    .flags         = DEVICE_MCA,
+    .flags         = DEVICE_MCA | DEVICE_AUDIO_IN,
     .local         = 2,
     .init          = ess_x688_mca_init,
     .close         = sb_close,
@@ -8915,7 +10303,7 @@ const device_t ess_chipchat_16_mca_device = {
 const device_t ess_1788_device = {
     .name          = "ESS AudioDrive ES1788/ES1698", /* ES1698 is a rebadged ES1788 */
     .internal_name = "ess_es1788",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = 1,
     .init          = ess_1x88_onboard_init,
     .close         = sb_close,
@@ -8929,7 +10317,7 @@ const device_t ess_1788_device = {
 const device_t ess_1888_device = {
     .name          = "ESS AudioDrive ES1888",
     .internal_name = "ess_es1888",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = 2,
     .init          = ess_1x88_onboard_init,
     .close         = sb_close,
@@ -8943,7 +10331,7 @@ const device_t ess_1888_device = {
 const device_t ess_1888_compaq_device = {
     .name          = "ESS AudioDrive ES1888 (Compaq)",
     .internal_name = "ess_es1888_compaq",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = 0x12,
     .init          = ess_1x88_onboard_init,
     .close         = sb_close,
@@ -8957,7 +10345,7 @@ const device_t ess_1888_compaq_device = {
 const device_t ess_1887_device = {
     .name          = "ESS AudioDrive ES1887",
     .internal_name = "ess_es1887",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = 3,
     .init          = ess_1x88_onboard_init,
     .close         = sb_close,
@@ -8971,7 +10359,7 @@ const device_t ess_1887_device = {
 const device_t ess_1868_device = {
     .name          = "ESS AudioDrive ES1868",
     .internal_name = "ess_es1868",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = 0,
     .init          = ess_186x_init,
     .close         = sb_close,
@@ -8979,14 +10367,32 @@ const device_t ess_1868_device = {
     .available     = NULL,
     .speed_changed = sb_speed_changed,
     .force_redraw  = NULL,
-    .config        = ess_1688_pnp_config
+    .config        = ess_1688_pnp_config,
+    .short_name    = "ESS ES1868",
+    .ide_boards    = ide_boards_quaternary
 };
 
 const device_t ess_1869_device = {
     .name          = "ESS AudioDrive ES1869",
     .internal_name = "ess_es1869",
-    .flags         = DEVICE_ISA16,
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
     .local         = 1,
+    .init          = ess_186x_init,
+    .close         = sb_close,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = sb_speed_changed,
+    .force_redraw  = NULL,
+    .config        = ess_1688_pnp_config,
+    .short_name    = "ESS ES1869",
+    .ide_boards    = ide_boards_quaternary
+};
+
+const device_t ess_1869_onboard_device = {
+    .name          = "ESS AudioDrive ES1869 (On-Board)",
+    .internal_name = "ess_es1869_onboard",
+    .flags         = DEVICE_ISA16 | DEVICE_AUDIO_IN,
+    .local         = 1 | 2,
     .init          = ess_186x_init,
     .close         = sb_close,
     .reset         = NULL,

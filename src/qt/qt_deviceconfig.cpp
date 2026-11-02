@@ -31,6 +31,8 @@
 #include <QLabel>
 #include <QDir>
 #include <QSettings>
+#include <QSet>
+#include <QStandardItemModel>
 #include <QStringBuilder>
 #include <QCollator>
 
@@ -43,12 +45,18 @@ extern "C" {
 #include <86box/mem.h>
 #include <86box/random.h>
 #include <86box/rom.h>
+#include <86box/timer.h>
+#include <86box/thread.h>
+#include <86box/network.h>
+#include <86box/scsi.h>
 }
 
 #include "qt_filefield.hpp"
 #include "qt_models_common.hpp"
 #include "qt_util.hpp"
 #include "qt_preferences.hpp"
+#include "qt_settingsnetwork.hpp"
+#include "qt_settingsstoragecontrollers.hpp"
 #ifdef Q_OS_WINDOWS
 #    define WIN32_LEAN_AND_MEAN
 #    include <windows.h>
@@ -123,17 +131,85 @@ enumerateSerialDevices()
     return serialDevices;
 }
 
-QComboBox *cbox_memory   = nullptr;
-QComboBox *cbox_memory_2 = nullptr;
+QComboBox *cbox_memory         = nullptr;
+QComboBox *cbox_memory_2       = nullptr;
 
-QComboBox *cbox_bios     = nullptr;
+QComboBox *cbox_bios           = nullptr;
+QComboBox *cbox_in530_bootlogo = nullptr;
 
-const _device_config_ *cfg_memory    = nullptr;
-const _device_config_ *cfg_memory_2  = nullptr;
+const _device_config_ *cfg_memory         = nullptr;
+const _device_config_ *cfg_memory_2       = nullptr;
 
-const _device_config_ *cfg_bios      = nullptr;
+const _device_config_ *cfg_bios           = nullptr;
+const _device_config_ *cfg_in530_bootlogo = nullptr;
 
 int bios_rows = 0;
+
+/* The slot another EISA card is set to, read the way that card's init
+   will read it: from its own section of the configuration, or from its
+   default when it has never been configured. */
+static int
+EisaSlotOf(const _device_ *dev, int instance)
+{
+    device_context_t ctx;
+    int              def = 1;
+
+    for (const _device_config_ *c = dev->config; (c != nullptr) && (c->type != CONFIG_END); ++c) {
+        if (!strcmp(c->name, "slot")) {
+            def = c->default_int;
+            break;
+        }
+    }
+    device_set_context(&ctx, dev, instance);
+    return config_get_int(ctx.name, const_cast<char *>("slot"), def);
+}
+
+/* One card to a slot. The other EISA cards the settings currently hold,
+   SCSI and network, each have a slot; those choices are greyed out here,
+   the way a SCSI ID already taken is greyed out for a disk. The card being
+   configured keeps whatever it has, so a clash left over from an older
+   configuration shows as the selected, disabled entry and must be moved. */
+void
+DeviceConfig::GreyOutTakenEisaSlots(QComboBox *cbox, int instance)
+{
+    auto     *settings = qobject_cast<Settings *>(parentWidget());
+    auto     *model    = qobject_cast<QStandardItemModel *>(cbox->model());
+    QSet<int> taken;
+
+    if ((settings == nullptr) || (model == nullptr))
+        return;
+
+    /* A Settings page not built yet has the saved configuration's cards. */
+    for (int i = 0; i < SCSI_CARD_MAX; ++i) {
+        const int       card = (settings->storageControllers != nullptr) ? settings->storageControllers->scsiCard(i)
+                                                                         : scsi_card_current[i];
+        const _device_ *dev  = scsi_card_getdevice(card);
+
+        if ((dev == nullptr) || !(dev->flags & DEVICE_EISA))
+            continue;
+        if ((dev == cfg_dev) && ((i + 1) == instance))
+            continue;
+        taken.insert(EisaSlotOf(dev, i + 1));
+    }
+    for (int i = 0; i < NET_CARD_MAX; ++i) {
+        const int       card = (settings->network != nullptr) ? settings->network->netCard(i)
+                                                              : net_cards_conf[i].device_num;
+        const _device_ *dev  = network_card_getdevice(card);
+
+        if ((dev == nullptr) || !(dev->flags & DEVICE_EISA))
+            continue;
+        if ((dev == cfg_dev) && ((i + 1) == instance))
+            continue;
+        taken.insert(EisaSlotOf(dev, i + 1));
+    }
+
+    for (int row = 0; row < model->rowCount(); ++row) {
+        auto *item = model->item(row);
+
+        if ((item != nullptr) && taken.contains(item->data(Qt::UserRole).toInt()))
+            item->setEnabled(false);
+    }
+}
 
 void
 DeviceConfig::ProcessConfig(void *dc, const void *c, const bool is_dep)
@@ -181,6 +257,10 @@ DeviceConfig::ProcessConfig(void *dc, const void *c, const bool is_dep)
                                          config->default_int);
                 break;
             case CONFIG_TYPE_STRING:
+                selected = config_get_string(device_context->name, const_cast<char *>(config->name),
+                                             const_cast<char *>(config->default_string));
+                break;
+            case CONFIG_TYPE_STRHEX:
                 selected = config_get_string(device_context->name, const_cast<char *>(config->name),
                                              const_cast<char *>(config->default_string));
                 break;
@@ -262,6 +342,8 @@ DeviceConfig::ProcessConfig(void *dc, const void *c, const bool is_dep)
                     cbox->setCurrentIndex(currentIndex);
                     if (rows < 2)
                         cbox->setEnabled(false);
+                    if (!strcmp(config->name, "slot") && (cfg_dev != nullptr) && (cfg_dev->flags & DEVICE_EISA))
+                        GreyOutTakenEisaSlots(cbox, device_context->instance);
                     if (!strcmp(config->name, "memory") || !strcmp(config->name, "framebuffer_memory")) {
                         cbox_memory   = cbox;
                         cfg_memory    = config;
@@ -269,6 +351,11 @@ DeviceConfig::ProcessConfig(void *dc, const void *c, const bool is_dep)
                     if (!strcmp(config->name, "texture_memory")) {
                         cbox_memory_2 = cbox;
                         cfg_memory_2  = config;
+                    }
+                    if (!strcmp(config->name, "boot_logo") &&
+                        (cfg_dev != nullptr) && !strcmp(cfg_dev->internal_name, "in530")) {
+                        cbox_in530_bootlogo = cbox;
+                        cfg_in530_bootlogo  = config;
                     }
                     break;
                 }
@@ -405,6 +492,18 @@ DeviceConfig::ProcessConfig(void *dc, const void *c, const bool is_dep)
                     cbox->setCurrentIndex(currentIndex);
                     break;
                 }
+            case CONFIG_STRHEX:
+                {
+                    const auto lineEdit = new QLineEdit;
+                    lineEdit->setObjectName(config->name);
+                    // The mask fixes both the character set and the width: four hex digits,
+                    // which is exactly the 16-bit range this type is meant to hold.
+                    lineEdit->setInputMask("HHHH;0");
+                    lineEdit->setText(selected.toUpper());
+                    lineEdit->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Preferred);
+                    this->ui->formLayout->addRow(tr(config->description).append(colon), lineEdit);
+                    break;
+                }
             case CONFIG_MAC:
                 {
                     // QHBoxLayout for the line edit widget and the generate button
@@ -441,7 +540,9 @@ DeviceConfig::ProcessConfig(void *dc, const void *c, const bool is_dep)
         ++config;
     }
 
-    if ((cfg_memory != nullptr) && (cfg_bios != nullptr) && (bios != -1))
+    if ((cbox_bios != nullptr) && (cfg_bios != nullptr) && (bios != -1) &&
+        (((cfg_memory != nullptr) && (cbox_memory != nullptr)) ||
+         ((cfg_in530_bootlogo != nullptr) && (cbox_in530_bootlogo != nullptr))))
         connect(cbox_bios, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &DeviceConfig::on_comboIndexChanged);
 
     on_comboIndexChanged(bios);
@@ -456,15 +557,17 @@ DeviceConfig::ConfigureDevice(const _device_ *device, int instance, Settings *se
 
     cfg_dev = (device_t *) device;
 
-    cbox_memory   = nullptr;
-    cbox_memory_2 = nullptr;
+    cbox_memory         = nullptr;
+    cbox_memory_2       = nullptr;
 
-    cbox_bios     = nullptr;
+    cbox_bios           = nullptr;
+    cbox_in530_bootlogo = nullptr;
 
-    cfg_memory    = nullptr;
-    cfg_memory_2  = nullptr;
+    cfg_memory          = nullptr;
+    cfg_memory_2        = nullptr;
 
-    cfg_bios      = nullptr;
+    cfg_bios            = nullptr;
+    cfg_in530_bootlogo  = nullptr;
 
     bios_rows     = 0;
 
@@ -515,6 +618,10 @@ DeviceConfig::ConfigureDevice(const _device_ *device, int instance, Settings *se
                                              config->default_int);
                     break;
                 case CONFIG_TYPE_STRING:
+                    selected = config_get_string(device_context.name, const_cast<char *>(config->name),
+                                                 const_cast<char *>(config->default_string));
+                    break;
+                case CONFIG_TYPE_STRHEX:
                     selected = config_get_string(device_context.name, const_cast<char *>(config->name),
                                                  const_cast<char *>(config->default_string));
                     break;
@@ -614,6 +721,22 @@ DeviceConfig::ConfigureDevice(const _device_ *device, int instance, Settings *se
                         }
                         break;
                     }
+                case CONFIG_STRHEX:
+                    {
+                        const auto *lineEdit = dc.findChild<QLineEdit *>(config->name);
+                        // Store the hex value in uppercase; displayText() skips the mask's
+                        // unfilled placeholders, so a partly typed value is not padded out.
+                        auto hexText     = lineEdit->displayText().toUpper();
+                        int  hex_changed = 0;
+                        hex_changed |= strcasecmp(config_get_string(device_context.name, config->name,
+                                                                    const_cast<char *>(config->default_string)),
+                                                  hexText.toUtf8().constData());
+                        if (hex_changed) {
+                            config_set_string(device_context.name, config->name, hexText.toUtf8().constData());
+                            has_changed |= 1;
+                        }
+                        break;
+                    }
                 case CONFIG_MAC:
                     {
                         const auto *lineEdit = dc.findChild<QLineEdit *>(config->name);
@@ -693,6 +816,9 @@ DeviceConfig::on_comboIndexChanged(int index)
         if (bios_flags & BIOS_LIMIT_MAX_MEMORY)
             max_mem = ((bios_flags >> 8) & 0xff);
 
+        if (bios_flags & BIOS_FIXED_MEMORY)
+            min_mem = max_mem = cfg_memory->default_int;
+
         mem = MAX(mem, min_mem);    /* No less than minimum memory. */
         mem = MIN(mem, max_mem);    /* No more than maximum memory. */
 
@@ -769,5 +895,42 @@ DeviceConfig::on_comboIndexChanged(int index)
             cbox_memory_2->setEnabled(true);
         else
             cbox_memory_2->setEnabled(false);
+    }
+
+    if ((cbox_in530_bootlogo != nullptr) && (cbox_bios != nullptr) &&
+        (cfg_in530_bootlogo != nullptr) && (cfg_bios != nullptr) &&
+        (cfg_dev != nullptr) && !strcmp(cfg_dev->internal_name, "in530") &&
+        (cbox_bios->currentIndex() >= 0)) {
+        const int   bios_idx  = cbox_bios->currentData().toInt();
+        const char *bios_name = cfg_bios->bios[bios_idx].internal_name;
+        const int   selector  = (cbox_in530_bootlogo->currentIndex() >= 0)
+                                   ? cbox_in530_bootlogo->currentData().toInt()
+                                   : cfg_in530_bootlogo->default_int;
+
+        cbox_in530_bootlogo->clear();
+
+        auto add_logo = [](const char *description, int value) {
+            Models::AddEntry(cbox_in530_bootlogo->model(), tr(description), value);
+        };
+
+        add_logo("Disabled", 4);
+
+        if (!strcmp(bios_name, "in530_pb_111j")) {
+            add_logo("Packard Bell", 1);
+            add_logo("NEC",          2);
+            add_logo("PowerMate",    3);
+        } else if (!strcmp(bios_name, "in530_pb_129")) {
+            add_logo("Packard Bell", 1);
+            add_logo("Japaq",        2);
+            add_logo("PowerMate",    3);
+        } else  {
+			/* Only one logo */
+            add_logo("Enabled", 1);
+        }
+
+        int current_index = cbox_in530_bootlogo->findData(selector);
+        if (current_index < 0)
+            current_index = cbox_in530_bootlogo->findData(cfg_in530_bootlogo->default_int);
+        cbox_in530_bootlogo->setCurrentIndex(current_index);
     }
 }

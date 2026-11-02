@@ -41,6 +41,7 @@
 #include <86box/ui.h>
 #include <86box/gdbstub.h>
 #include <86box/floppy_control_socket.h>
+#include <86box/automation.h>
 
 #include "sdl_monitor.h"
 #include "sdl_render.h"
@@ -228,14 +229,17 @@ main_thread(UNUSED(void *param))
 #endif
 
         old_time = new_time;
-        if ((drawits > 0 || fast_forward) && !dopause) {
+        automation_poll();
+        const int automation = automation_run_state();
+        if ((drawits > 0 || fast_forward || (automation == AUTOMATION_RUN)) && !dopause && (automation != AUTOMATION_HOLD)) {
             /* Yes, so do one frame now. */
             drawits -= force_10ms ? 10 : 1;
-            if (drawits > 50 || fast_forward)
+            if (drawits > 50 || fast_forward || (automation == AUTOMATION_RUN))
                 drawits = 0;
 
             /* Run a block of code. */
             pc_run();
+            automation_quantum();
 
             /* Every 200 frames we save the machine status. */
             if (++frames >= (force_10ms ? 200 : 2000) && nvr_dosave) {
@@ -244,8 +248,13 @@ main_thread(UNUSED(void *param))
                 frames     = 0;
             }
         }
-        else /* Just so we dont overload the host OS. */
+        else {
+            /* Keep answering a GDB client while the machine isn't running. */
+            gdbstub_poll();
+
+            /* Just so we dont overload the host OS. */
             SDL_Delay(1);
+        }
 
         /* Let the device activity flags decay, so the GPIO activity LED
            follows the disk instead of latching on. */
@@ -336,6 +345,36 @@ timer_onesec(UNUSED(void *param), UNUSED(SDL_TimerID timerID), uint32_t interval
 {
     pc_onesec();
     return interval;
+}
+
+/* Convert an SDL button number to a mouse_get_buttons_ex() mask. */
+static int
+sdl_mouse_buttonmask(uint8_t button)
+{
+    int ret;
+
+    switch (button) {
+        case SDL_BUTTON_LEFT:
+            ret = 1;
+            break;
+        case SDL_BUTTON_RIGHT:
+            ret = 2;
+            break;
+        case SDL_BUTTON_MIDDLE:
+            ret = 4;
+            break;
+        case SDL_BUTTON_X1:
+            ret = 8;
+            break;
+        case SDL_BUTTON_X2:
+            ret = 16;
+            break;
+        default:
+            ret = 0;
+            break;
+    }
+
+    return ret;
 }
 
 extern int gfxcard[GFXCARD_MAX];
@@ -524,32 +563,15 @@ main(int argc, char **argv)
                                 plat_mouse_capture(1);
                                 break;
                             }
-                            if (mouse_get_buttons() < 3 && event.button.button == SDL_BUTTON_MIDDLE && !video_fullscreen) {
+                            if (mouse_capture && (sdl_mouse_buttonmask(event.button.button) & mouse_get_release_buttons()) && !video_fullscreen) {
                                 plat_mouse_capture(0);
                                 break;
                             }
                             if (mouse_capture || video_fullscreen) {
-                                int buttonmask = 0;
+                                int buttonmask = sdl_mouse_buttonmask(event.button.button);
 
-                                switch (event.button.button) {
-                                    case SDL_BUTTON_LEFT:
-                                        buttonmask = 1;
-                                        break;
-                                    case SDL_BUTTON_RIGHT:
-                                        buttonmask = 2;
-                                        break;
-                                    case SDL_BUTTON_MIDDLE:
-                                        buttonmask = 4;
-                                        break;
-                                    case SDL_BUTTON_X1:
-                                        buttonmask = 8;
-                                        break;
-                                    case SDL_BUTTON_X2:
-                                        buttonmask = 16;
-                                        break;
-                                    default:
-                                        printf("Unknown mouse button %d\n", event.button.button);
-                                }
+                                if (buttonmask == 0)
+                                    printf("Unknown mouse button %d\n", event.button.button);
                                 SDL_LockMutex(mousemutex);
 #ifdef USE_SDL2_LIB
                                 if (event.button.state == SDL_PRESSED)
@@ -670,6 +692,10 @@ check_flags:
             extern void sdl_blit(int x, int y, int w, int h);
             sdl_blit(params.x, params.y, params.w, params.h);
         }
+        /* Drawing the OSD can ask it to close -- posting a message does -- so
+         * finish that here instead of waiting for the next input event. */
+        if (flag_osd_open && osd_take_pending_close())
+            flag_osd_open = 0;
         if (title_set) {
             ui_window_title_real();
         }

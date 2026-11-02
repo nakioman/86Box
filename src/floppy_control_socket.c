@@ -40,12 +40,12 @@ fcs_create_drive_status(int drive)
     cJSON_AddNumberToObject(obj, "drive", drive);
     cJSON_AddBoolToObject(obj, "inserted", fdd_runtime_inserted(drive));
     if (fdd_runtime_inserted(drive))
-        cJSON_AddStringToObject(obj, "path", floppyfns[drive]);
+        cJSON_AddStringToObject(obj, "path", drives[drive].image_path);
     else
         cJSON_AddNullToObject(obj, "path");
     cJSON_AddBoolToObject(obj, "read_only", fdd_get_effective_read_only(drive));
     cJSON_AddBoolToObject(obj, "busy", fdd_is_busy(drive));
-    cJSON_AddBoolToObject(obj, "changed", !!fdd_changed[drive]);
+    cJSON_AddBoolToObject(obj, "changed", !!drives[drive].changed);
 
     return obj;
 }
@@ -106,7 +106,7 @@ fcs_handle_status(const cJSON *id, cJSON *params)
     int drive_status = fcs_get_drive(params, 0, &drive);
 
     if (drive_status < 0)
-        return fcs_error_response(id, "invalid_drive", "Drive must be an integer from 0 through 3.");
+        return fcs_error_response(id, "invalid_drive", "Drive must be an integer from 0 through 7.");
 
     if (drive_status == 0)
         return fcs_success_response(id, fcs_create_drive_status(drive));
@@ -155,7 +155,7 @@ fcs_handle_insert(const cJSON *id, cJSON *params)
     cJSON *path_json = cJSON_GetObjectItemCaseSensitive(params, "path");
 
     if (fcs_get_drive(params, 1, &drive) < 0)
-        return fcs_error_response(id, "invalid_drive", "Drive must be an integer from 0 through 3.");
+        return fcs_error_response(id, "invalid_drive", "Drive must be an integer from 0 through 7.");
     if (!cJSON_IsString(path_json) || !path_json->valuestring || path_json->valuestring[0] == '\0')
         return fcs_error_response(id, "missing_image", "Image path must be a non-empty absolute path.");
     if (!fcs_path_is_absolute(path_json->valuestring))
@@ -180,13 +180,13 @@ fcs_handle_eject(const cJSON *id, cJSON *params)
     int drive = -1;
 
     if (fcs_get_drive(params, 1, &drive) < 0)
-        return fcs_error_response(id, "invalid_drive", "Drive must be an integer from 0 through 3.");
+        return fcs_error_response(id, "invalid_drive", "Drive must be an integer from 0 through 7.");
     if (fdd_is_busy(drive))
         return fcs_error_response(id, "busy_drive", "Drive is busy.");
 
     floppy_eject((uint8_t) drive);
-    ui_writeprot[drive] = 0;
-    fdd_changed[drive]  = 1;
+    drives[drive].read_only = 0;
+    drives[drive].changed   = 1;
 
     return fcs_success_response(id, fcs_create_drive_status(drive));
 }
