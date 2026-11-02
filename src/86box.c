@@ -227,6 +227,7 @@ int      do_auto_pause                          = 0;              /* (G) Auto-pa
 int      do_auto_dialog_pause                   = 0;              /* (G) Auto-pause the emulator on dialog boxes */
 int      force_constant_mouse                   = 0;              /* (C) Force constant updating of the mouse */
 int      mouse_auto_capture                     = 0;              /* (C) Auto-capture mouse on start */
+int      cdrom_ioctl_read_ahead                 = 1;              /* (C) Read ahead on host CD-ROM drives (Linux IOCTL) */
 int      hook_enabled                           = 1;              /* (C) Keyboard hook is enabled */
 int      test_mode                              = 0;              /* (C) Test mode */
 char     uuid[MAX_UUID_LEN]                     = { '\0' };       /* (C) UUID or machine identifier */
