@@ -481,6 +481,13 @@ typedef struct cdrom_ops_t {
     void     (*load)(const void *local);
     /* Return 13 ASCII MCN digits and nonzero if a catalog number is present. */
     int      (*get_mcn)(const void *local, uint8_t *mcn);
+    /*
+       Optional, for host drives: start reading at least count sectors from lba
+       in the background without blocking the caller.
+     */
+    void     (*prefetch)(const void *local, const uint32_t lba, const uint32_t count);
+    /* Optional: zero while a background read is still in progress. */
+    int      (*ready)(const void *local);
 } cdrom_ops_t;
 
 typedef struct cdrom {
@@ -628,6 +635,8 @@ extern int             cdrom_lba_to_msf_accurate(const int lba);
 extern void            cdrom_interleave_subch(uint8_t *d, const uint8_t *s);
 extern void            cdrom_deinterleave_subch(uint8_t *d, const uint8_t *s);
 extern double          cdrom_seek_time(const cdrom_t *dev);
+extern void            cdrom_host_prefetch(cdrom_t *dev, const uint32_t lba, const uint32_t count);
+extern int             cdrom_host_ready(const cdrom_t *dev);
 extern void            cdrom_stop(cdrom_t *dev);
 extern void            cdrom_seek(cdrom_t *dev, const uint32_t pos, const uint8_t vendor_type);
 extern int             cdrom_has_data(cdrom_t *dev);

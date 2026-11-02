@@ -1522,6 +1522,7 @@ scsi_cdrom_reset(scsi_common_t *sc)
 
     if (dev != NULL) {
         scsi_cdrom_rezero(dev);
+        dev->host_wait    = 0;
         dev->tf->status   = 0;
         dev->callback     = 0.0;
         scsi_cdrom_set_callback(dev);
@@ -1799,14 +1800,142 @@ scsi_cdrom_media_access_complete(scsi_cdrom_t *dev, const int ret)
     scsi_cdrom_set_callback(dev);
 }
 
+/* Polling interval while waiting for a background host read, in us. */
+#define HOST_WAIT_POLL 500.0
+
+/*
+   Read the first blocks of a READ command and enter the data phase. Split out
+   of scsi_cdrom_command() so it can also run once a background host read
+   started by scsi_cdrom_host_defer() has completed.
+ */
+static void
+scsi_cdrom_read_first(scsi_cdrom_t *dev, int32_t *BufLen)
+{
+    const int ret          = scsi_cdrom_read_blocks(dev);
+    const int alloc_length = dev->requested_blocks * dev->block_len;
+
+    if (ret > 0) {
+        dev->packet_len       = alloc_length;
+
+        scsi_cdrom_set_buf_len(dev, BufLen,
+                               (int32_t *) &dev->packet_len);
+
+        scsi_cdrom_data_command_finish(dev, alloc_length,
+                                       dev->block_len,
+                                       alloc_length, 0);
+
+        if (dev->packet_status != PHASE_COMPLETE)
+            ui_sb_update_icon(SB_CDROM | dev->id, 1);
+        else
+            ui_sb_update_icon(SB_CDROM | dev->id, 0);
+    } else {
+        scsi_cdrom_set_phase(dev, SCSI_PHASE_STATUS);
+        dev->packet_status = (ret < 0) ? PHASE_ERROR : PHASE_COMPLETE;
+        dev->callback      = 20.0 * CDROM_TIME;
+        scsi_cdrom_set_callback(dev);
+    }
+}
+
+/*
+   On ATAPI, if the host drive backend has to go to the drive for the next
+   blocks, start that read in the background and keep the drive busy instead
+   of blocking the emulation thread. ide_atapi_callback() then calls
+   scsi_cdrom_host_wait() before the data-in phase until the data is there.
+   Returns nonzero if the read was deferred.
+ */
+static int
+scsi_cdrom_host_defer(scsi_cdrom_t *dev, const int mode)
+{
+    uint32_t count;
+
+    if ((dev->drv->bus_type != CDROM_BUS_ATAPI) || (dev->sector_len == 0))
+        return 0;
+
+    /* The sectors the next scsi_cdrom_read_blocks() will read. */
+    count = 1;
+    if (scsi_cdrom_current_mode(dev) != 2) {
+        count = dev->tf->request_length / 2048;
+        if (count < 1)
+            count = 1;
+    }
+    if (count > dev->sector_len)
+        count = dev->sector_len;
+
+    cdrom_host_prefetch(dev->drv, dev->sector_pos, count);
+    if (cdrom_host_ready(dev->drv))
+        return 0;
+
+    scsi_cdrom_log(dev->log, "Waiting for host read of %i sectors at %08X\n",
+                   count, dev->sector_pos);
+
+    dev->host_wait     = mode;
+    dev->tf->status    = BUSY_STAT;
+    /*
+       Next blocks keep their data-in phase (PIO or DMA); the first blocks of
+       a READ get theirs from scsi_cdrom_read_first() once the data is there.
+     */
+    if (mode == 2)
+        dev->packet_status = PHASE_DATA_IN;
+    dev->callback      = HOST_WAIT_POLL;
+    scsi_cdrom_set_callback(dev);
+
+    return 1;
+}
+
+/* IDE hook, see scsi_cdrom_host_defer(). */
+static int
+scsi_cdrom_host_wait(scsi_common_t *sc)
+{
+    scsi_cdrom_t *dev  = (scsi_cdrom_t *) sc;
+    int32_t       blen = 65536;
+    int           mode;
+    int           ret;
+
+    if ((dev == NULL) || !dev->host_wait)
+        return 0;
+
+    if (!cdrom_host_ready(dev->drv)) {
+        dev->callback = HOST_WAIT_POLL;
+        scsi_cdrom_set_callback(dev);
+        return 1;
+    }
+
+    mode           = dev->host_wait;
+    dev->host_wait = 0;
+
+    /* The real seek has already taken place in guest time. */
+    dev->drv->seek_diff = 0;
+
+    if (mode == 2)
+        scsi_cdrom_read_first(dev, &blen);
+    else {
+        ret = scsi_cdrom_read_blocks(dev);
+
+        if (ret > 0) {
+            scsi_cdrom_set_period(dev);
+
+            ui_sb_update_icon(SB_CDROM | dev->id,
+                              (dev->packet_status != PHASE_COMPLETE));
+        } else
+            scsi_cdrom_media_access_complete(dev, ret);
+    }
+
+    return 1;
+}
+
 static void
 scsi_cdrom_read(scsi_common_t *sc)
 {
     scsi_cdrom_t *dev   = (scsi_cdrom_t *) sc;
     const int osl       = dev->sector_len;
-    const int ret       = scsi_cdrom_read_blocks(dev);
+    int       ret;
 
     dev->drv->seek_diff = 0;
+
+    if (scsi_cdrom_host_defer(dev, 1))
+        return;
+
+    ret = scsi_cdrom_read_blocks(dev);
 
     if (ret > 0) {
         if (osl > 0)
@@ -3040,6 +3169,7 @@ scsi_cdrom_command(scsi_common_t *sc, const uint8_t *cdb)
 
     dev->was_cached  = -1;
     dev->sectors_num = 1;
+    dev->host_wait   = 0;
 
     if (dev->drv->bus_type == CDROM_BUS_SCSI) {
         BufLen = &scsi_devices[scsi_bus][scsi_id].buffer_length;
@@ -3326,29 +3456,8 @@ scsi_cdrom_command(scsi_common_t *sc, const uint8_t *cdb)
                     dev->block_len      = 0xffffffff;
                     dev->buffer_pos     = 0x00000000;
 
-                    ret                 = scsi_cdrom_read_blocks(dev);
-                    alloc_length        = dev->requested_blocks * dev->block_len;
-
-                    if (ret > 0) {
-                        dev->packet_len       = alloc_length;
-
-                        scsi_cdrom_set_buf_len(dev, BufLen,
-                                               (int32_t *) &dev->packet_len);
-
-                        scsi_cdrom_data_command_finish(dev, alloc_length,
-                                                       dev->block_len,
-                                                       alloc_length, 0);
-
-                        if (dev->packet_status != PHASE_COMPLETE)
-                            ui_sb_update_icon(SB_CDROM | dev->id, 1);
-                        else
-                            ui_sb_update_icon(SB_CDROM | dev->id, 0);
-                    } else {
-                        scsi_cdrom_set_phase(dev, SCSI_PHASE_STATUS);
-                        dev->packet_status = (ret < 0) ? PHASE_ERROR : PHASE_COMPLETE;
-                        dev->callback      = 20.0 * CDROM_TIME;
-                        scsi_cdrom_set_callback(dev);
-                    }
+                    if (!scsi_cdrom_host_defer(dev, 2))
+                        scsi_cdrom_read_first(dev, BufLen);
                 } else {
                     scsi_cdrom_set_phase(dev, SCSI_PHASE_STATUS);
                     /* scsi_cdrom_log(dev->log, "All done - callback set\n"); */
@@ -4730,6 +4839,7 @@ scsi_cdrom_drive_reset(const int c)
             id->command_stop           = scsi_cdrom_command_stop;
             id->bus_master_error       = scsi_cdrom_bus_master_error;
             id->read                   = scsi_cdrom_read;
+            id->host_wait              = scsi_cdrom_host_wait;
             id->write                  = NULL;
             id->interrupt_drq          = dev->drv->is_early;
 

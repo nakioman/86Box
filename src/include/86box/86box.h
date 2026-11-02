@@ -251,6 +251,7 @@ extern int    force_constant_mouse;         /* (C) Force constant updating of th
 extern int    mouse_auto_capture;          /* (C) Auto-capture mouse on start */
 extern int    cdrom_ioctl_read_ahead;      /* (C) Read ahead on host CD-ROM drives (Linux IOCTL) */
 extern int    cdrom_ioctl_fast_reads;      /* (C) Read-ahead without subchannel, cooked on Mode 1 tracks */
+extern int    cdrom_ioctl_async;           /* (C) Keep the machine running while the host drive reads */
 extern double mouse_sensitivity;            /* (G) Mouse sensitivity scale */
 #ifdef _Atomic
 extern _Atomic double mouse_x_error;        /* Mouse error accumulator - Y */

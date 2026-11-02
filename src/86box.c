@@ -229,6 +229,7 @@ int      force_constant_mouse                   = 0;              /* (C) Force c
 int      mouse_auto_capture                     = 0;              /* (C) Auto-capture mouse on start */
 int      cdrom_ioctl_read_ahead                 = 1;              /* (C) Read ahead on host CD-ROM drives (Linux IOCTL) */
 int      cdrom_ioctl_fast_reads                 = 1;              /* (C) Read-ahead without subchannel, cooked on Mode 1 tracks */
+int      cdrom_ioctl_async                      = 1;              /* (C) Keep the machine running while the host drive reads */
 int      hook_enabled                           = 1;              /* (C) Keyboard hook is enabled */
 int      test_mode                              = 0;              /* (C) Test mode */
 char     uuid[MAX_UUID_LEN]                     = { '\0' };       /* (C) UUID or machine identifier */
